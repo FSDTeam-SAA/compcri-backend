@@ -1,0 +1,70 @@
+{
+  "name": "compcri-calendar-api",
+  "version": "1.0.0",
+  "description": "Production backend for the Compcri AI-powered calendar assistant",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "dev:worker": "nodemon worker.js",
+    "start": "node server.js",
+    "worker": "node worker.js",
+    "seed": "node scripts/seed.js",
+    "db:migrate": "node scripts/migrate.js",
+    "docs:postman": "node scripts/generate-postman.js",
+    "benchmark:ai": "node scripts/benchmark-ai.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "express",
+    "calendar",
+    "gemini",
+    "openai",
+    "revenuecat",
+    "agenda",
+    "mongodb"
+  ],
+  "author": "OpenAI",
+  "license": "MIT",
+  "dependencies": {
+    "@agendajs/mongo-backend": "^4.0.3",
+    "@google/genai": "^1.30.0",
+    "agenda": "^6.2.6",
+    "argon2": "^0.44.0",
+    "cloudinary": "^2.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "firebase-admin": "^14.3.0",
+    "google-auth-library": "^10.5.0",
+    "helmet": "^8.1.0",
+    "http-status-codes": "^2.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "luxon": "^3.7.2",
+    "mongoose": "^9.0.0",
+    "multer": "^2.0.2",
+    "nodemailer": "^9.0.5",
+    "openai": "^7.8.0",
+    "pino": "^10.1.0",
+    "pino-http": "^11.0.0",
+    "rrule": "^2.8.1",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.14",
+    "mongodb-memory-server": "^10.3.0",
+    "nodemon": "^3.1.11",
+    "supertest": "^7.1.4",
+    "vitest": "^4.0.14"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

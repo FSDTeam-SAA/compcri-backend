@@ -1,0 +1,25 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import * as controller from '../controllers/admin.controller.js';
+import { adminLogin } from '../controllers/auth.controller.js';
+import { authenticate, authorize } from '../middlewares/auth.js';
+import { authLimiter } from '../middlewares/rateLimit.js';
+import { validate } from '../middlewares/validate.js';
+import { loginSchema } from '../schemas/auth.schemas.js';
+import { changePasswordSchema } from '../schemas/user.schemas.js';
+import * as schemas from '../schemas/admin.schemas.js';
+
+const router = Router();
+router.post('/auth/login', authLimiter, validate({ body: loginSchema }), adminLogin);
+router.use(authenticate, authorize('ADMIN'));
+router.get('/dashboard', validate({ query: z.object({ period: z.enum(['week', 'month', 'year']).default('month') }) }), controller.dashboard);
+router.get('/users', validate({ query: schemas.usersQuery }), controller.users);
+router.get('/users/:id', validate({ params: schemas.userParams }), controller.user);
+router.patch('/users/:id/status', validate({ params: schemas.userParams, body: schemas.userStatusBody }), controller.userStatus);
+router.delete('/users/:id', validate({ params: schemas.userParams, body: schemas.deleteUserBody }), controller.deleteUser);
+router.get('/subscriptions', validate({ query: z.object({ period: z.enum(['week', 'month', 'year']).default('month') }) }), controller.subscriptions);
+router.get('/audit-logs', validate({ query: schemas.auditQuery }), controller.audits);
+router.get('/profile', controller.profile);
+router.patch('/profile', validate({ body: schemas.adminProfileBody }), controller.updateProfile);
+router.put('/password', validate({ body: changePasswordSchema }), controller.password);
+export default router;

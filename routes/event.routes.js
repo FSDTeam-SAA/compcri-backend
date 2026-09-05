@@ -1,0 +1,25 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import * as controller from '../controllers/event.controller.js';
+import { authenticate } from '../middlewares/auth.js';
+import { validate } from '../middlewares/validate.js';
+import * as schemas from '../schemas/event.schemas.js';
+
+const router = Router();
+router.use(['/calendars', '/events'], authenticate);
+router.get('/calendars/:calendarId/events', validate({ params: schemas.calendarParams, query: schemas.listEventsQuery }), controller.list);
+router.post('/calendars/:calendarId/events', validate({ params: schemas.calendarParams, body: schemas.eventBody }), controller.create);
+router.get('/calendars/:calendarId/availability', validate({ params: schemas.calendarParams, query: schemas.availabilityQuery }), controller.availability);
+router.get('/calendars/:calendarId/settings', validate({ params: schemas.calendarParams }), controller.getSettings);
+router.patch('/calendars/:calendarId/settings', validate({ params: schemas.calendarParams, body: schemas.calendarSettingsBody }), controller.updateSettings);
+router.get('/events/shared', validate({ query: schemas.sharedEventsQuery }), controller.shared);
+router.get('/events/:eventId', validate({ params: schemas.eventIdParams }), controller.get);
+router.patch('/events/:eventId', validate({ params: schemas.eventIdParams, body: schemas.updateEventBody }), controller.update);
+router.delete('/events/:eventId', validate({ params: schemas.eventIdParams, query: z.object({ version: z.coerce.number().int().min(0) }) }), controller.remove);
+router.patch('/events/:eventId/completion', validate({ params: schemas.eventIdParams, body: schemas.completeBody }), controller.complete);
+router.post('/events/:eventId/shares', validate({ params: schemas.eventIdParams, body: schemas.shareBody }), controller.share);
+router.get('/events/:eventId/shares', validate({ params: schemas.eventIdParams }), controller.listShares);
+router.delete('/events/:eventId/shares/:shareId', validate({ params: schemas.shareIdParams }), controller.revokeShare);
+router.put('/events/:eventId/recurrence-exception', validate({ params: schemas.eventIdParams, body: schemas.recurrenceExceptionBody }), controller.exception);
+router.put('/events/:eventId/rsvp', validate({ params: schemas.eventIdParams, body: schemas.rsvpBody }), controller.rsvp);
+export default router;

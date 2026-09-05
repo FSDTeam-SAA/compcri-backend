@@ -1,0 +1,25 @@
+import catchAsync from '../utils/catchAsync.js';
+import { sendSuccess } from '../utils/response.js';
+import * as service from '../services/network.service.js';
+
+export const contacts = catchAsync(async (req, res) => sendSuccess(res, await service.listContacts(req.user._id, req.query.search)));
+export const sendRequest = catchAsync(async (req, res) => sendSuccess(res, await service.sendContactRequest(req.user._id, req.body.contactCode, req.body.relation), { status: 201 }));
+export const requests = catchAsync(async (req, res) => sendSuccess(res, await service.listContactRequests(req.user._id, req.query.direction)));
+export const respond = catchAsync(async (req, res) => sendSuccess(res, await service.respondContactRequest(req.user._id, req.params.id, req.body.action, req.body.relation)));
+export const removeContact = catchAsync(async (req, res) => { await service.removeContact(req.user._id, req.params.id); sendSuccess(res, { deleted: true }); });
+export const updateContact = catchAsync(async (req, res) => sendSuccess(res, await service.updateContactRelation(req.user._id, req.params.id, req.body.relation)));
+export const contactEvents = catchAsync(async (req, res) => sendSuccess(res, await service.listContactEvents(req.user._id, req.params.id, req.query.from, req.query.to)));
+export const createGroup = catchAsync(async (req, res) => sendSuccess(res, await service.createGroup(req.user._id, req.body.name), { status: 201 }));
+export const groups = catchAsync(async (req, res) => sendSuccess(res, await service.listGroups(req.user._id)));
+export const group = catchAsync(async (req, res) => sendSuccess(res, await service.getGroup(req.user._id, req.params.id)));
+export const joinGroup = catchAsync(async (req, res) => sendSuccess(res, await service.joinGroup(req.user._id, req.body.code)));
+export const addMember = catchAsync(async (req, res) => sendSuccess(res, await service.addGroupMember(req.user._id, req.params.id, req.body.userId, req.body.role)));
+export const updateMember = catchAsync(async (req, res) => sendSuccess(res, await service.updateGroupMember(req.user._id, req.params.id, req.params.memberId, req.body.role)));
+export const removeMember = catchAsync(async (req, res) => sendSuccess(res, await service.removeGroupMember(req.user._id, req.params.id, req.params.memberId)));
+export const leaveGroup = catchAsync(async (req, res) => { await service.leaveGroup(req.user._id, req.params.id); sendSuccess(res, { left: true }); });
+export const deleteGroup = catchAsync(async (req, res) => { await service.deleteGroup(req.user._id, req.params.id); sendSuccess(res, { deleted: true }); });
+export const transferGroup = catchAsync(async (req, res) => sendSuccess(res, await service.transferGroupOwnership(req.user._id, req.params.id, req.body.userId)));
+export const inviteMember = catchAsync(async (req, res) => sendSuccess(res, await service.inviteGroupMember(req.user._id, req.params.id, req.body.userId, req.body.role), { status: 201 }));
+export const invitations = catchAsync(async (req, res) => sendSuccess(res, await service.listGroupInvitations(req.user._id)));
+export const respondInvitation = catchAsync(async (req, res) => sendSuccess(res, await service.respondGroupInvitation(req.user._id, req.params.id, req.body.action)));
+export const groupEvent = catchAsync(async (req, res) => sendSuccess(res, await service.createGroupEvent(req.user._id, req.params.id, req.body), { status: 201 }));
