@@ -8,6 +8,14 @@ let server;
 const start = async () => {
   await connectDatabase();
   server = app.listen(env.PORT, () => logger.info({ port: env.PORT }, 'API server started'));
+  // Mobile clients keep pooled connections open between turns. Node's 5s
+  // default closes an idle socket without telling the client, so the next
+  // request — a voice upload after a pause to record — goes out on a dead
+  // connection and fails as "Connection closed before full header was
+  // received". POST is not retried by the client, so it surfaces as an error.
+  // headersTimeout must stay above keepAliveTimeout.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 };
 
 const shutdown = async (signal, exitCode = 0) => {
