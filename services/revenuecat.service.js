@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import { RevenueCatEvent, Subscription } from '../models/Subscription.js';
 import ApiError from '../utils/ApiError.js';
 import { createNotification } from './notification.service.js';
+import { effectivePlan } from '../utils/premium.js';
 
 const requestRevenueCat = async (path, options = {}) => {
   if (!env.REVENUECAT_SECRET_API_KEY) throw new ApiError(503, 'RevenueCat is not configured', 'REVENUECAT_UNAVAILABLE');
@@ -25,7 +26,12 @@ export const getSubscriptionForUser = async (userId) => {
     Subscription.findOne({ userId })
   ]);
   if (!user) throw new ApiError(404, 'User not found', 'USER_NOT_FOUND');
-  return { appUserId: user.revenueCatAppUserId, plan: user.plan, premiumUntil: user.premiumUntil, subscription };
+  return {
+    appUserId: user.revenueCatAppUserId,
+    plan: effectivePlan(user),
+    premiumUntil: env.PAYWALL_ENABLED ? user.premiumUntil : null,
+    subscription
+  };
 };
 
 export const reconcileSubscriber = async (appUserId) => {

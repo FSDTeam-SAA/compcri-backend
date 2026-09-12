@@ -54,16 +54,57 @@ export const createGeminiSession = ({ client, systemInstruction, history, tools,
     }
   };
 
+  // The streaming variant reports the same shape as `send`, so the turn loop
+  // does not care which one produced it — the only difference is that text
+  // reaches the caller while it is still being written.
+  const sendStream = async (message, onDelta) => {
+    const consume = async () => {
+      const stream = await chat.sendMessageStream({ message });
+      let text = '';
+      let usage;
+      let refused = false;
+      const toolCalls = [];
+      for await (const chunk of stream) {
+        if (isSafetyResponse(chunk)) refused = true;
+        const piece = chunk.text || '';
+        if (piece) {
+          text += piece;
+          onDelta(piece);
+        }
+        for (const call of chunk.functionCalls || []) {
+          toolCalls.push({ id: call.id, name: call.name, args: call.args || {} });
+        }
+        if (chunk.usageMetadata) usage = chunk.usageMetadata;
+      }
+      if (refused) throw new AiProviderError('AI provider refused the request', {
+        category: 'safety', provider: 'gemini', statusCode: 422, fallbackEligible: false
+      });
+      return { text, toolCalls, usage: normalizeUsage(usage) };
+    };
+
+    try {
+      // The timeout covers the whole stream, not just its first byte: a stalled
+      // stream is exactly the failure this is meant to catch.
+      return await withTimeout(consume(), timeoutMs, 'gemini');
+    } catch (error) {
+      throw normalizeProviderError(error, 'gemini');
+    }
+  };
+
+  const toolResponses = (results) => results.map((result) => ({
+    functionResponse: {
+      id: result.id,
+      name: result.name,
+      response: result.output
+    }
+  }));
+
   return {
     provider: 'gemini',
     model: env.GEMINI_MODEL,
     sendUserMessage: (content) => send(content),
-    sendToolResults: (results) => send(results.map((result) => ({
-      functionResponse: {
-        id: result.id,
-        name: result.name,
-        response: result.output
-      }
-    })))
+    sendToolResults: (results) => send(toolResponses(results)),
+    sendUserMessageStream: (content, onDelta) => sendStream(content, onDelta),
+    sendToolResultsStream: (results, onDelta) => sendStream(toolResponses(results), onDelta)
   };
 };

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { LOCALES, PLANS, USER_ROLES, USER_STATUSES } from '../constants/enums.js';
+import { env } from '../config/env.js';
 
 const notificationPreferencesSchema = new mongoose.Schema({
   pushEnabled: { type: Boolean, default: true },
@@ -38,10 +39,13 @@ const userSchema = new mongoose.Schema({
 
 userSchema.methods.toJSON = function toJSON() {
   const value = this.toObject();
+  if (!env.PAYWALL_ENABLED && value.role === 'USER') {
+    value.plan = 'PREMIUM';
+    value.premiumUntil = null;
+  }
   delete value.passwordHash;
   delete value.__v;
   return value;
 };
 
 export default mongoose.model('User', userSchema);
-

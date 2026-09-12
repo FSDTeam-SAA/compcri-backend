@@ -29,6 +29,8 @@ const sampleBodies = {
   'POST /calendars/{calendarId}/events': { title: 'Project meeting', description: 'Weekly planning', startsAt: '2026-08-24T09:00:00.000Z', endsAt: '2026-08-24T10:00:00.000Z', timeZone: 'Asia/Dhaka', reminderMinutes: [15], overrideConflicts: false },
   'PATCH /events/{eventId}': { title: 'Updated project meeting', version: 0, overrideConflicts: false },
   'PATCH /events/{eventId}/completion': { completed: true, version: 0 },
+  'POST /notes': { calendarId: '{{calendarId}}', title: 'Review prep', body: 'Ask Ana to move the review to Monday morning.', pinned: false },
+  'PATCH /notes/{id}': { title: 'Review prep', body: 'Ask Ana to move the review to Monday morning.', pinned: true },
   'POST /events/{eventId}/shares': { targetType: 'USER', targetIds: ['{{contactId}}'], permission: 'RESPOND' },
   'PUT /events/{eventId}/recurrence-exception': { originalStartAt: '2026-08-31T09:00:00.000Z', cancelled: true, version: 0, overrideConflicts: false },
   'PUT /events/{eventId}/rsvp': { status: 'ACCEPTED' },

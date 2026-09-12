@@ -108,4 +108,76 @@ describe('AI provider adapters', () => {
     });
     await expect(session.sendUserMessage('List tomorrow')).rejects.toMatchObject({ category: 'timeout', fallbackEligible: true });
   });
+
+  const streamOf = (chunks) => (async function* generate() {
+    for (const chunk of chunks) yield chunk;
+  })();
+
+  it('reports Gemini text as it streams and still returns the whole turn', async () => {
+    const sendMessageStream = vi.fn(async () => streamOf([
+      { text: 'One ' },
+      { text: 'event.' },
+      { functionCalls: [{ id: 'call-1', name: 'list_events', args: {} }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 5 } }
+    ]));
+    const session = createGeminiSession({
+      client: { chats: { create: () => ({ sendMessageStream }) } },
+      systemInstruction: 'Calendar assistant', history: [], tools, timeoutMs: 1000
+    });
+
+    const deltas = [];
+    const result = await session.sendUserMessageStream('List tomorrow', (text) => deltas.push(text));
+
+    expect(deltas).toEqual(['One ', 'event.']);
+    expect(result.text).toBe('One event.');
+    expect(result.toolCalls[0]).toMatchObject({ id: 'call-1', name: 'list_events' });
+    expect(result.usage).toMatchObject({ inputTokens: 9, outputTokens: 5 });
+  });
+
+  it('reports OpenAI text as it streams and reads the completed response', async () => {
+    const completed = {
+      output: [{ type: 'function_call', call_id: 'call-2', name: 'list_events', arguments: '{}' }],
+      output_text: 'One event.',
+      usage: { input_tokens: 11, output_tokens: 4 }
+    };
+    const create = vi.fn(async () => streamOf([
+      { type: 'response.output_text.delta', delta: 'One ' },
+      { type: 'response.output_text.delta', delta: 'event.' },
+      { type: 'response.completed', response: completed }
+    ]));
+    const session = createOpenAiSession({
+      client: { responses: { create } },
+      systemInstruction: 'Calendar assistant', history: [], tools, timeoutMs: 1000
+    });
+
+    const deltas = [];
+    const result = await session.sendUserMessageStream('List tomorrow', (text) => deltas.push(text));
+
+    expect(deltas).toEqual(['One ', 'event.']);
+    expect(create.mock.calls[0][0].stream).toBe(true);
+    expect(result.text).toBe('One event.');
+    expect(result.toolCalls[0]).toMatchObject({ id: 'call-2', name: 'list_events' });
+    expect(result.usage).toMatchObject({ inputTokens: 11, outputTokens: 4 });
+  });
+
+  it('fails a stream that ends without a response instead of saving nothing', async () => {
+    const session = createOpenAiSession({
+      client: { responses: { create: vi.fn(async () => streamOf([{ type: 'response.output_text.delta', delta: 'half' }])) } },
+      systemInstruction: 'Calendar assistant', history: [], tools, timeoutMs: 1000
+    });
+    await expect(session.sendUserMessageStream('List tomorrow', () => {}))
+      .rejects.toMatchObject({ category: 'invalid_response', fallbackEligible: true });
+  });
+
+  it('times out a stream that stalls part-way through', async () => {
+    const stalled = (async function* generate() {
+      yield { text: 'One ' };
+      await new Promise(() => {});
+    })();
+    const session = createGeminiSession({
+      client: { chats: { create: () => ({ sendMessageStream: async () => stalled }) } },
+      systemInstruction: 'Calendar assistant', history: [], tools, timeoutMs: 20
+    });
+    await expect(session.sendUserMessageStream('List tomorrow', () => {}))
+      .rejects.toMatchObject({ category: 'timeout', fallbackEligible: true });
+  });
 });

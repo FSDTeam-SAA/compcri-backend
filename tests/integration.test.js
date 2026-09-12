@@ -17,6 +17,7 @@ beforeAll(async () => {
   replset = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
   process.env.NODE_ENV = 'test';
   process.env.DISABLE_JOBS = 'true';
+  process.env.PAYWALL_ENABLED = 'true';
   process.env.MONGODB_URI = replset.getUri('compcri');
   process.env.JWT_ACCESS_SECRET = 'test-access-secret-that-is-long-enough-123';
   process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-that-is-long-enough-456';
@@ -65,7 +66,7 @@ describe('foundation and authentication', () => {
       '/users/me', '/users/me/password', '/users/me/notification-preferences', '/users/me/calendars', '/users/me/subscription-management', '/users/me/deletion',
       '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
-      '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
+      '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
       '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password'
     ];
     expect(Object.keys(docs.body.paths).sort()).toEqual(documentedPaths.sort());
@@ -312,6 +313,78 @@ describe('network, subscriptions, notifications, and AI', () => {
     expect(await models.Event.countDocuments()).toBe(1);
   });
 
+  it('streams a turn as it happens and ends with the saved message', async () => {
+    const user = await register('stream@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email: 'stream@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const aiModule = await import('../services/ai.service.js');
+    const args = { title: 'Streamed meeting', startsAt: '2026-09-04T09:00:00.000Z', endsAt: '2026-09-04T10:00:00.000Z', timeZone: 'UTC' };
+    const turns = [
+      // The model thinks out loud, calls a tool, then writes the real answer.
+      [{ text: 'Let me check' }, { functionCalls: [{ id: 'call-stream', name: 'propose_create_event', args }], usageMetadata: {} }],
+      [{ text: 'I prepared ' }, { text: 'the event.' }, { usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 8 } }]
+    ];
+    const sendMessageStream = vi.fn(async () => (async function* generate() {
+      for (const chunk of turns.shift()) yield chunk;
+    })());
+    aiModule.setAiClientForTests({ chats: { create: () => ({ sendMessageStream }) } });
+
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    const response = await request(app)
+      .post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages/stream`)
+      .set(auth(token))
+      .send({ content: 'Create a meeting' })
+      .buffer(true)
+      .parse((res, callback) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => callback(null, body));
+      })
+      .expect(200);
+
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.headers['x-accel-buffering']).toBe('no');
+    const events = response.body
+      .split('\n\n')
+      .filter((block) => block.startsWith('data: '))
+      .map((block) => JSON.parse(block.slice(6)));
+
+    expect(events.map((event) => event.type)).toEqual([
+      'delta', 'reset', 'tools', 'delta', 'delta', 'done'
+    ]);
+    expect(events.find((event) => event.type === 'tools').names).toEqual(['propose_create_event']);
+    // Everything after the last reset is exactly what was saved: the thinking
+    // aloud before the tool call is retracted, not stitched onto the answer.
+    const streamed = events.slice(events.findLastIndex((event) => event.type === 'reset'))
+      .filter((event) => event.type === 'delta')
+      .map((event) => event.text)
+      .join('');
+    const done = events.at(-1);
+    expect(streamed).toBe('I prepared the event.');
+    expect(done.message.content).toBe('I prepared the event.');
+    expect(done.pendingActions).toHaveLength(1);
+    expect(await models.Event.countDocuments()).toBe(0);
+  });
+
+  it('reports a pre-flight failure as a normal HTTP error, not a stream', async () => {
+    const user = await register('stream-free@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email: 'stream-free@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    // The plan lapses before the turn is sent, so it dies before the model says
+    // anything — the client needs the status code, not an SSE frame to unwrap.
+    await models.User.updateOne({ email: 'stream-free@example.com' }, { $set: { plan: 'FREE', premiumUntil: null } });
+    const response = await request(app)
+      .post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages/stream`)
+      .set(auth(token))
+      .send({ content: 'Create a meeting' })
+      .expect(403);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.body.error.code).toBe('PREMIUM_REQUIRED');
+  });
+
   it('uses OpenAI as the primary provider when selected', async () => {
     const user = await register('openai@example.com').expect(201);
     const token = user.body.data.accessToken;
@@ -505,6 +578,118 @@ describe('network, subscriptions, notifications, and AI', () => {
     const response = await request(app).post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages`).set(auth(token)).send({ content: 'What is on my schedule?' }).expect(429);
     expect(response.body.error.code).toBe('AI_QUOTA_EXHAUSTED');
     expect(response.body.error.details.resetAt).toMatch(/T00:00:00\.000Z$/);
+  });
+});
+
+describe('notes', () => {
+  it('derives a title, searches, pins to the top, and soft-deletes', async () => {
+    const user = await register('notes@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+
+    const derived = await request(app).post('/api/v1/notes').set(auth(token)).send({
+      calendarId, body: 'Ask Ana to move the review to Monday. She is out on Friday.'
+    }).expect(201);
+    expect(derived.body.data.title).toBe('Ask Ana to move the review to Monday.');
+    expect(derived.body.data.source).toBe('TEXT');
+
+    const titled = await request(app).post('/api/v1/notes').set(auth(token)).send({
+      calendarId, title: 'Groceries', body: 'Oat milk, lemons, coffee beans.'
+    }).expect(201);
+
+    const all = await request(app).get('/api/v1/notes').set(auth(token)).expect(200);
+    expect(all.body.data).toHaveLength(2);
+    expect(all.body.meta.total).toBe(2);
+
+    const found = await request(app).get('/api/v1/notes?search=lemons').set(auth(token)).expect(200);
+    expect(found.body.data.map((note) => note._id)).toEqual([titled.body.data._id]);
+
+    // Pinning wins over recency, so the older note leads the list.
+    await request(app).patch(`/api/v1/notes/${derived.body.data._id}`).set(auth(token)).send({ pinned: true }).expect(200);
+    const pinnedFirst = await request(app).get('/api/v1/notes').set(auth(token)).expect(200);
+    expect(pinnedFirst.body.data[0]._id).toBe(derived.body.data._id);
+
+    await request(app).delete(`/api/v1/notes/${titled.body.data._id}`).set(auth(token)).expect(200);
+    await request(app).get(`/api/v1/notes/${titled.body.data._id}`).set(auth(token)).expect(404);
+    const remaining = await request(app).get('/api/v1/notes').set(auth(token)).expect(200);
+    expect(remaining.body.data).toHaveLength(1);
+  });
+
+  it('keeps notes private from calendar delegates and filters them by event', async () => {
+    const owner = await register('noteowner@example.com', 'Owner').expect(201);
+    const ownerToken = owner.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(ownerToken))).body.data.primaryCalendar._id;
+    await request(app).post('/api/v1/delegations').set(auth(ownerToken)).send({
+      accountType: 'NEW', email: 'noteassistant@example.com', displayName: 'Assistant', password: 'AssistantPassword123!', preset: 'FULL_ACCESS'
+    }).expect(201);
+    const assistant = await request(app).post('/api/v1/auth/login').send({ email: 'noteassistant@example.com', password: 'AssistantPassword123!' }).expect(200);
+    const assistantToken = assistant.body.data.accessToken;
+
+    const event = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(ownerToken)).send({
+      title: 'Interview', startsAt: '2026-09-11T09:00:00.000Z', endsAt: '2026-09-11T10:00:00.000Z', timeZone: 'UTC', reminderMinutes: []
+    }).expect(201);
+    const eventId = event.body.data.event._id;
+
+    const filed = await request(app).post('/api/v1/notes').set(auth(ownerToken)).send({
+      calendarId, body: 'Prepare portfolio walkthrough.', eventId
+    }).expect(201);
+    await request(app).post('/api/v1/notes').set(auth(ownerToken)).send({ calendarId, body: 'Unrelated note.' }).expect(201);
+
+    const byEvent = await request(app).get(`/api/v1/notes?eventId=${eventId}`).set(auth(ownerToken)).expect(200);
+    expect(byEvent.body.data.map((note) => note._id)).toEqual([filed.body.data._id]);
+
+    // Full calendar access never exposes the owner's personal notes.
+    const delegateView = await request(app).get('/api/v1/notes').set(auth(assistantToken)).expect(200);
+    expect(delegateView.body.data).toHaveLength(0);
+    await request(app).get(`/api/v1/notes/${filed.body.data._id}`).set(auth(assistantToken)).expect(404);
+    await request(app).patch(`/api/v1/notes/${filed.body.data._id}`).set(auth(assistantToken)).send({ pinned: true }).expect(404);
+  });
+
+  it('rejects a note filed against an unreachable event', async () => {
+    const user = await register('notelink@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    const stranger = await register('notestranger@example.com').expect(201);
+    const strangerToken = stranger.body.data.accessToken;
+    const strangerCalendar = (await request(app).get('/api/v1/users/me').set(auth(strangerToken))).body.data.primaryCalendar._id;
+    const hidden = await request(app).post(`/api/v1/calendars/${strangerCalendar}/events`).set(auth(strangerToken)).send({
+      title: 'Private', startsAt: '2026-09-12T09:00:00.000Z', endsAt: '2026-09-12T10:00:00.000Z', timeZone: 'UTC', reminderMinutes: []
+    }).expect(201);
+
+    const rejected = await request(app).post('/api/v1/notes').set(auth(token)).send({
+      calendarId, body: 'Trying to attach to an event I cannot see.', eventId: hidden.body.data.event._id
+    });
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(403);
+    expect(rejected.body.error.code).toBe('EVENT_ACCESS_DENIED');
+  });
+
+  it('transcribes dictated audio into a note and keeps the spoken duration', async () => {
+    const user = await register('voicenote@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    const aiModule = await import('../services/ai.service.js');
+    const transcribe = vi.fn(async () => ({
+      text: 'Book the dentist before the end of the month. Mornings are better.',
+      usage: { type: 'duration', seconds: 9 }
+    }));
+    aiModule.setAiProviderClientForTests('openai', {
+      audio: { transcriptions: { create: transcribe } }
+    });
+
+    const spoken = await request(app)
+      .post('/api/v1/notes/voice')
+      .set(auth(token))
+      .field('calendarId', calendarId)
+      .attach('audio', Buffer.from('test webm audio'), { filename: 'note.webm', contentType: 'audio/webm' })
+      .expect(201);
+
+    expect(spoken.body.data.transcription).toMatchObject({ model: 'gpt-transcribe', durationSeconds: 9 });
+    expect(spoken.body.data.note).toMatchObject({
+      source: 'VOICE',
+      title: 'Book the dentist before the end of the month.',
+      body: 'Book the dentist before the end of the month. Mornings are better.'
+    });
+    expect(spoken.body.data.note.voice.durationSeconds).toBe(9);
   });
 });
 

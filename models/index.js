@@ -11,6 +11,7 @@ export { default as Group } from './Group.js';
 export { default as GroupInvitation } from './GroupInvitation.js';
 export * from './EventShare.js';
 export { default as Notification } from './Notification.js';
+export { default as Note } from './Note.js';
 export { default as Device } from './Device.js';
 export * from './Ai.js';
 export * from './Subscription.js';

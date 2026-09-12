@@ -7,6 +7,11 @@ const booleanString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const enabledByDefaultBooleanString = z
+  .enum(['true', 'false'])
+  .default('true')
+  .transform((value) => value === 'true');
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(5000),
@@ -33,6 +38,7 @@ const schema = z.object({
   OPENAI_VOICE_MAX_FILE_MB: z.coerce.number().int().min(1).max(25).default(10),
   AI_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   AI_DAILY_QUOTA: z.coerce.number().int().positive().default(50),
+  PAYWALL_ENABLED: enabledByDefaultBooleanString,
   REVENUECAT_SECRET_API_KEY: z.string().optional(),
   REVENUECAT_WEBHOOK_AUTH: z.string().optional(),
   REVENUECAT_PREMIUM_ENTITLEMENT: z.string().default('premium'),

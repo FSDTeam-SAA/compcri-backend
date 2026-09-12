@@ -33,7 +33,8 @@ export const NOTIFICATION_CATEGORIES = [
   'SECURITY',
   'SUBSCRIPTION'
 ];
-export const AI_ACTION_TYPES = ['CREATE_EVENT', 'UPDATE_EVENT', 'DELETE_EVENT'];
+export const NOTE_SOURCES = ['TEXT', 'VOICE'];
+export const AI_ACTION_TYPES = ['CREATE_EVENT', 'UPDATE_EVENT', 'DELETE_EVENT', 'CREATE_NOTE'];
 export const OPENAI_TTS_VOICES = [
   'alloy',
   'ash',

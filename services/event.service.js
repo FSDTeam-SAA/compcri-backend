@@ -7,6 +7,7 @@ import User from '../models/User.js';
 import Group from '../models/Group.js';
 import { EventResponse, EventShare } from '../models/EventShare.js';
 import ApiError from '../utils/ApiError.js';
+import { hasPremiumAccess } from '../utils/premium.js';
 import { assertCalendarCreate, getCalendarAccess, getEventAccess } from './calendarAccess.service.js';
 import { claimMedia, deleteMediaAsset } from './media.service.js';
 import { createNotification } from './notification.service.js';
@@ -80,8 +81,7 @@ const countMonthOccurrences = async (calendarId, startsAt, excludeId) => {
 
 const assertQuota = async (calendar, startsAt, recurrenceRrule, excludeId) => {
   const owner = await User.findById(calendar.ownerId).select('plan premiumUntil');
-  const premium = owner?.plan === 'PREMIUM' && (!owner.premiumUntil || owner.premiumUntil > new Date());
-  if (premium) return;
+  if (hasPremiumAccess(owner)) return;
   const monthsToCheck = recurrenceRrule ? 12 : 1;
   for (let offset = 0; offset < monthsToCheck; offset += 1) {
     const target = new Date(Date.UTC(startsAt.getUTCFullYear(), startsAt.getUTCMonth() + offset, 1));
@@ -95,7 +95,7 @@ const assertQuota = async (calendar, startsAt, recurrenceRrule, excludeId) => {
 
 const isPremiumCalendar = async (calendar) => {
   const owner = await User.findById(calendar.ownerId).select('plan premiumUntil');
-  return owner?.plan === 'PREMIUM' && (!owner.premiumUntil || owner.premiumUntil > new Date());
+  return hasPremiumAccess(owner);
 };
 
 const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, durationMinutes) => {
@@ -395,6 +395,6 @@ export const findAvailability = async (userId, calendarId, from, to, durationMin
   validateRange(rangeStart, rangeEnd);
   const access = await getCalendarAccess(userId, calendarId);
   const owner = await User.findById(access.calendar.ownerId).select('plan premiumUntil');
-  if (owner.plan !== 'PREMIUM' || (owner.premiumUntil && owner.premiumUntil <= new Date())) throw new ApiError(403, 'Premium subscription required', 'PREMIUM_REQUIRED');
+  if (!hasPremiumAccess(owner)) throw new ApiError(403, 'Premium subscription required', 'PREMIUM_REQUIRED');
   return computeAvailability(access.calendar, calendarId, rangeStart, rangeEnd, durationMinutes);
 };

@@ -87,6 +87,33 @@ export const aiToolDefinitions = [
       properties: { eventId: { type: 'string' }, version: { type: 'integer' } },
       required: ['eventId', 'version']
     }
+  },
+  {
+    name: 'search_notes',
+    description: "Search the user's saved notes by keyword. Use when the request refers to something they noted, jotted down, or recorded earlier.",
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        search: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 20 }
+      }
+    }
+  },
+  {
+    name: 'propose_create_note',
+    description: 'Propose saving a note for the user. This never writes immediately and requires user confirmation.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string' },
+        eventId: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } }
+      },
+      required: ['body']
+    }
   }
 ];
 
@@ -129,6 +156,16 @@ export const aiToolSchemas = {
   propose_delete_event: z.object({
     eventId: z.string().regex(/^[a-f\d]{24}$/i),
     version: z.number().int().min(0)
+  }),
+  search_notes: z.object({
+    search: z.string().trim().max(100).optional(),
+    limit: z.number().int().min(1).max(20).optional()
+  }),
+  propose_create_note: z.object({
+    title: z.string().trim().min(1).max(160).optional(),
+    body: z.string().trim().min(1).max(20000),
+    eventId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
+    tags: z.array(z.string().trim().min(1).max(40)).max(10).optional()
   })
 };
 

@@ -33,48 +33,92 @@ export const createOpenAiSession = ({ client, systemInstruction, history, tools,
     content: message.content
   }));
 
-  const request = async () => {
-    try {
-      const response = await withTimeout(client.responses.create({
-        model: env.OPENAI_MODEL,
-        instructions: systemInstruction,
-        input,
-        tools: tools.map((tool) => ({
-          type: 'function',
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          strict: false
-        })),
-        tool_choice: 'auto',
-        parallel_tool_calls: true,
-        reasoning: { effort: env.OPENAI_REASONING_EFFORT },
-        max_output_tokens: 2048,
-        store: false
-      }), timeoutMs, 'openai');
+  const payload = () => ({
+    model: env.OPENAI_MODEL,
+    instructions: systemInstruction,
+    input,
+    tools: tools.map((tool) => ({
+      type: 'function',
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: false
+    })),
+    tool_choice: 'auto',
+    parallel_tool_calls: true,
+    reasoning: { effort: env.OPENAI_REASONING_EFFORT },
+    max_output_tokens: 2048,
+    store: false
+  });
 
-      if (hasRefusal(response)) throw new AiProviderError('AI provider refused the request', {
-        category: 'safety', provider: 'openai', statusCode: 422, fallbackEligible: false
+  // Shared by the buffered and streamed paths: whichever way the response
+  // arrived, it is read the same way and appended to the running input.
+  const finish = (response) => {
+    if (hasRefusal(response)) throw new AiProviderError('AI provider refused the request', {
+      category: 'safety', provider: 'openai', statusCode: 422, fallbackEligible: false
+    });
+
+    const toolCalls = (response.output || [])
+      .filter((item) => item.type === 'function_call')
+      .map((call) => {
+        try {
+          return { id: call.call_id, name: call.name, args: JSON.parse(call.arguments || '{}') };
+        } catch (error) {
+          throw new AiProviderError('OpenAI returned malformed tool arguments', {
+            category: 'invalid_response', provider: 'openai', statusCode: 502, cause: error
+          });
+        }
       });
 
-      const toolCalls = (response.output || [])
-        .filter((item) => item.type === 'function_call')
-        .map((call) => {
-          try {
-            return { id: call.call_id, name: call.name, args: JSON.parse(call.arguments || '{}') };
-          } catch (error) {
-            throw new AiProviderError('OpenAI returned malformed tool arguments', {
-              category: 'invalid_response', provider: 'openai', statusCode: 502, cause: error
-            });
-          }
-        });
+    input.push(...(response.output || []));
+    return { text: responseText(response), toolCalls, usage: normalizeUsage(response.usage) };
+  };
 
-      input.push(...(response.output || []));
-      return { text: responseText(response), toolCalls, usage: normalizeUsage(response.usage) };
+  const request = async () => {
+    try {
+      return finish(await withTimeout(client.responses.create(payload()), timeoutMs, 'openai'));
     } catch (error) {
       throw normalizeProviderError(error, 'openai');
     }
   };
+
+  const requestStream = async (onDelta) => {
+    const consume = async () => {
+      const stream = await client.responses.create({ ...payload(), stream: true });
+      let completed;
+      for await (const event of stream) {
+        if (event.type === 'response.output_text.delta' && event.delta) onDelta(event.delta);
+        if (event.type === 'error') throw new AiProviderError(event.message || 'OpenAI stream failed', {
+          category: 'unavailable', provider: 'openai', statusCode: 502
+        });
+        // `incomplete` still carries whatever was produced — a truncated answer
+        // beats discarding the turn and burning the user's quota for nothing.
+        if (['response.completed', 'response.incomplete'].includes(event.type)) completed = event.response;
+        if (event.type === 'response.failed') throw new AiProviderError(
+          event.response?.error?.message || 'OpenAI reported a failed response',
+          { category: 'unavailable', provider: 'openai', statusCode: 502 }
+        );
+      }
+      if (!completed) throw new AiProviderError('OpenAI stream ended without a response', {
+        category: 'invalid_response', provider: 'openai', statusCode: 502
+      });
+      return completed;
+    };
+
+    try {
+      // One timeout for the whole stream: a stall mid-answer is the failure
+      // that matters, not just a slow first byte.
+      return finish(await withTimeout(consume(), timeoutMs, 'openai'));
+    } catch (error) {
+      throw normalizeProviderError(error, 'openai');
+    }
+  };
+
+  const pushToolResults = (results) => input.push(...results.map((result) => ({
+    type: 'function_call_output',
+    call_id: result.id,
+    output: JSON.stringify(result.output)
+  })));
 
   return {
     provider: 'openai',
@@ -84,12 +128,16 @@ export const createOpenAiSession = ({ client, systemInstruction, history, tools,
       return request();
     },
     sendToolResults: async (results) => {
-      input.push(...results.map((result) => ({
-        type: 'function_call_output',
-        call_id: result.id,
-        output: JSON.stringify(result.output)
-      })));
+      pushToolResults(results);
       return request();
+    },
+    sendUserMessageStream: async (content, onDelta) => {
+      input.push({ role: 'user', content });
+      return requestStream(onDelta);
+    },
+    sendToolResultsStream: async (results, onDelta) => {
+      pushToolResults(results);
+      return requestStream(onDelta);
     }
   };
 };

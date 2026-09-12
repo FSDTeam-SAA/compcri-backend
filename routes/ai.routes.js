@@ -15,6 +15,7 @@ router.post('/conversations', validate({ body: schemas.conversationBody }), cont
 router.get('/conversations/:id', validate({ params: schemas.conversationParams }), controller.getConversation);
 router.delete('/conversations/:id', validate({ params: schemas.conversationParams }), controller.deleteConversation);
 router.post('/conversations/:id/messages', validate({ params: schemas.conversationParams, body: schemas.messageBody }), controller.sendMessage);
+router.post('/conversations/:id/messages/stream', validate({ params: schemas.conversationParams, body: schemas.messageBody }), controller.streamMessage);
 router.post(
   '/conversations/:id/voice-messages',
   audioUpload.single('audio'),

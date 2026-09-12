@@ -7,6 +7,71 @@ export const listConversations = catchAsync(async (req, res) => sendSuccess(res,
 export const getConversation = catchAsync(async (req, res) => sendSuccess(res, await service.getConversation(req.user._id, req.params.id)));
 export const deleteConversation = catchAsync(async (req, res) => { await service.deleteConversation(req.user._id, req.params.id); sendSuccess(res, { deleted: true }); });
 export const sendMessage = catchAsync(async (req, res) => sendSuccess(res, await service.sendMessage(req.user._id, req.params.id, req.body.content)));
+
+const SSE_HEARTBEAT_MS = 15000;
+
+/// The same turn as `sendMessage`, reported as it happens instead of once it
+/// is over. Events carry their own `type`: `delta` for a slice of the answer,
+/// `tools` for the calendar work behind it, `reset` to retract text the model
+/// is replacing, and `done` for the saved message and anything awaiting
+/// confirmation.
+export const streamMessage = async (req, res, next) => {
+  let streaming = false;
+  let heartbeat;
+  // `req.destroyed` is not the test for this: Express has already consumed the
+  // body by the time the handler runs, so the request stream is destroyed on
+  // every healthy turn. Only the response says whether anyone is still there.
+  let disconnected = false;
+  res.on('close', () => { disconnected = true; });
+
+  const send = (payload) => {
+    if (disconnected || res.writableEnded) return;
+    if (!streaming) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        // nginx buffers a proxied response by default, which would hold every
+        // token back until the turn ended — the one thing this route exists to
+        // avoid.
+        'X-Accel-Buffering': 'no'
+      });
+      res.flushHeaders?.();
+      streaming = true;
+      heartbeat = setInterval(() => {
+        if (!res.writableEnded) res.write(': ping\n\n');
+      }, SSE_HEARTBEAT_MS);
+    }
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const turn = await service.sendMessage(
+      req.user._id,
+      req.params.id,
+      req.body.content,
+      undefined,
+      { onEvent: send }
+    );
+    send({ type: 'done', message: turn.message, pendingActions: turn.pendingActions });
+  } catch (error) {
+    // Nothing has been written yet for the failures that happen before the
+    // model speaks — quota, entitlement, a missing conversation — so they stay
+    // ordinary HTTP errors with their real status codes.
+    if (!streaming) {
+      clearInterval(heartbeat);
+      return next(error);
+    }
+    send({
+      type: 'error',
+      code: error.code || 'AI_UNAVAILABLE',
+      message: error.message || 'AI assistant is temporarily unavailable'
+    });
+  } finally {
+    clearInterval(heartbeat);
+    if (streaming && !res.writableEnded) res.end();
+  }
+};
 export const sendVoiceMessage = catchAsync(async (req, res) => sendSuccess(
   res,
   await service.sendVoiceMessage(req.user._id, req.params.id, req.file, req.body.voice)

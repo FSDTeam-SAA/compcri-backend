@@ -28,7 +28,8 @@ export const openapi = {
       EventSharePermission: { type: 'string', enum: ['VIEW_ONLY', 'RESPOND', 'EDIT'] },
       RsvpStatus: { type: 'string', enum: ['PENDING', 'ACCEPTED', 'DECLINED', 'MAYBE'] },
       NotificationCategory: { type: 'string', enum: ['REMINDER', 'INVITATION', 'GROUP_UPDATE', 'CONTACT_REQUEST', 'SECURITY', 'SUBSCRIPTION'] },
-      AiActionType: { type: 'string', enum: ['CREATE_EVENT', 'UPDATE_EVENT', 'DELETE_EVENT'] },
+      AiActionType: { type: 'string', enum: ['CREATE_EVENT', 'UPDATE_EVENT', 'DELETE_EVENT', 'CREATE_NOTE'] },
+      NoteInput: { type: 'object', required: ['calendarId', 'body'], properties: { calendarId: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, eventId: { type: 'string' }, pinned: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } } } },
       RegisterInput: { type: 'object', required: ['email', 'password', 'termsVersion', 'termsAccepted'], properties: { email: { type: 'string', format: 'email' }, password: { type: 'string', minLength: 10 }, displayName: { type: 'string' }, timeZone: { type: 'string' }, termsVersion: { type: 'string' }, privacyVersion: { type: 'string' }, termsAccepted: { const: true } } },
       LoginInput: { type: 'object', required: ['email', 'password'], properties: { email: { type: 'string', format: 'email' }, password: { type: 'string' } } },
       EventInput: { type: 'object', required: ['title', 'startsAt', 'endsAt', 'timeZone'], properties: { title: { type: 'string' }, description: { type: 'string' }, location: { type: 'string' }, startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: 'string', format: 'date-time' }, timeZone: { type: 'string' }, reminderMinutes: { type: 'array', items: { type: 'integer' } }, recurrenceRrule: { type: 'string' }, overrideConflicts: { type: 'boolean' } } }
@@ -87,6 +88,7 @@ export const openapi = {
     '/ai/conversations': { get: operation('List AI conversations'), post: operation('Create AI conversation') },
     '/ai/conversations/{id}': { get: operation('Get AI conversation', { parameters: [id('id')] }), delete: operation('Delete AI conversation', { parameters: [id('id')] }) },
     '/ai/conversations/{id}/messages': { post: operation('Send text message to the AI assistant', { parameters: [id('id')] }) },
+    '/ai/conversations/{id}/messages/stream': { post: operation('Send text message and stream the reply as server-sent events', { parameters: [id('id')] }) },
     '/ai/conversations/{id}/voice-messages': {
       post: operation('Send audio and receive a transcribed AI reply with MP3 speech', {
         parameters: [id('id')],
@@ -112,6 +114,9 @@ export const openapi = {
     '/notifications/{id}/read': { put: operation('Mark notification read', { parameters: [id('id')] }) },
     '/notifications/{id}': { delete: operation('Delete inbox notification', { parameters: [id('id')] }) },
     '/devices': { post: operation('Register FCM device'), delete: operation('Unregister FCM device') },
+    '/notes': { get: operation('List personal notes'), post: operation('Create a note', { requestBody: { $ref: '#/components/schemas/NoteInput' }, status: 201 }) },
+    '/notes/voice': { post: operation('Transcribe audio into a note', { requestContent: { 'multipart/form-data': { schema: { type: 'object', required: ['audio', 'calendarId'], properties: { audio: { type: 'string', format: 'binary' }, calendarId: { type: 'string' }, title: { type: 'string' }, eventId: { type: 'string' }, pinned: { type: 'string', enum: ['true', 'false'] }, tags: { type: 'string' } } } } }, status: 201 }) },
+    '/notes/{id}': { get: operation('Get note', { parameters: [id('id')] }), patch: operation('Update note', { parameters: [id('id')] }), delete: operation('Delete note', { parameters: [id('id')] }) },
     '/subscriptions/me': { get: operation('Get RevenueCat entitlement snapshot') },
     '/subscriptions/reconcile': { post: operation('Reconcile RevenueCat subscriber') },
     '/webhooks/revenuecat': { post: operation('RevenueCat webhook', { security: [] }) },
