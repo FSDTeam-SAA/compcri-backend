@@ -29,9 +29,11 @@ const schema = z.object({
   AI_PROVIDER: z.enum(['gemini', 'openai']).default('openai'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
+  // Thinking adds seconds before the first word; calendar turns rarely need it.
+  GEMINI_THINKING_LEVEL: z.enum(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']).default('MINIMAL'),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.6-luna'),
-  OPENAI_REASONING_EFFORT: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).default('low'),
+  OPENAI_REASONING_EFFORT: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).default('none'),
   OPENAI_TRANSCRIBE_MODEL: z.string().default('gpt-transcribe'),
   OPENAI_TTS_MODEL: z.string().default('tts-1'),
   OPENAI_TTS_VOICE: z.enum(OPENAI_TTS_VOICES).default('alloy'),

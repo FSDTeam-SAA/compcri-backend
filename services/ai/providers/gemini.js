@@ -34,6 +34,7 @@ export const createGeminiSession = ({ client, systemInstruction, history, tools,
         parametersJsonSchema: tool.parameters
       })) }],
       toolConfig: { functionCallingConfig: { mode: 'VALIDATED' } },
+      thinkingConfig: { thinkingLevel: env.GEMINI_THINKING_LEVEL },
       maxOutputTokens: 2048
     }
   });

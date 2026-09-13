@@ -22,6 +22,12 @@ router.post(
   validate({ params: schemas.conversationParams, body: schemas.voiceMessageBody }),
   controller.sendVoiceMessage
 );
+router.post(
+  '/conversations/:id/voice-messages/stream',
+  audioUpload.single('audio'),
+  validate({ params: schemas.conversationParams, body: schemas.voiceStreamBody }),
+  controller.streamVoiceMessage
+);
 router.patch('/conversations/:id/messages/:messageId', validate({ params: schemas.messageParams, body: schemas.messageBody }), controller.editMessage);
 router.delete('/conversations/:id/messages/:messageId', validate({ params: schemas.messageParams }), controller.deleteMessage);
 router.post('/actions/:id/confirm', validate({ params: schemas.actionParams, body: schemas.confirmActionBody }), controller.confirmAction);

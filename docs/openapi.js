@@ -106,6 +106,24 @@ export const openapi = {
         }
       })
     },
+    '/ai/conversations/{id}/voice-messages/stream': {
+      post: operation('Send audio and stream the transcript, AI reply, and sentence-by-sentence MP3 speech as server-sent events (transcript, delta, tools, reset, done, audio, audio_error, error)', {
+        parameters: [id('id')],
+        requestContent: {
+          'multipart/form-data': {
+            schema: {
+              type: 'object',
+              required: ['audio'],
+              properties: {
+                audio: { type: 'string', format: 'binary' },
+                voice: { type: 'string', enum: OPENAI_TTS_VOICES },
+                speak: { type: 'string', enum: ['true', 'false'], default: 'true' }
+              }
+            }
+          }
+        }
+      })
+    },
     '/ai/conversations/{id}/messages/{messageId}': { patch: operation('Edit latest user message and regenerate', { parameters: [id('id'), id('messageId')] }), delete: operation('Delete conversation message', { parameters: [id('id'), id('messageId')] }) },
     '/ai/actions/{id}/confirm': { post: operation('Confirm a pending AI calendar mutation', { parameters: [id('id')] }) },
     '/ai/actions/{id}/reject': { post: operation('Reject a pending AI calendar mutation', { parameters: [id('id')] }) },

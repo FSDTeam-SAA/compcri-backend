@@ -71,15 +71,99 @@ export const transcribeAudio = async (file) => {
     if (text.length > MAX_TRANSCRIPT_CHARACTERS) {
       throw new ApiError(StatusCodes.UNPROCESSABLE_ENTITY, 'The transcribed message is too long', 'AUDIO_TRANSCRIPT_TOO_LONG');
     }
+    // OpenAI reports detected languages as `{ code }` objects; keep just the codes.
+    const languages = (transcription.languages ?? [])
+      .map((language) => (typeof language === 'string' ? language : language?.code))
+      .filter(Boolean);
     return {
       text,
       model: env.OPENAI_TRANSCRIBE_MODEL,
-      ...(transcription.languages?.length && { languages: transcription.languages }),
+      ...(languages.length && { languages }),
       ...(transcription.usage?.type === 'duration' && { durationSeconds: transcription.usage.seconds })
     };
   } catch (error) {
     throw audioApiError(error, 'transcription');
   }
+};
+
+/// The first piece of a spoken reply is a single sentence, so it starts
+/// sounding as soon as that sentence exists; later pieces group sentences to
+/// keep the number of synthesis requests down.
+const FIRST_SPEECH_CHUNK_CHARACTERS = 1;
+const SPEECH_CHUNK_CHARACTERS = 160;
+// Latin, Devanagari/Bengali (।), Arabic/Urdu (؟ ۔) sentence ends are followed by
+// a space; Chinese and Japanese ones (。！？) are not.
+const sentenceBoundary = /[.!?…।॥؟۔]+["')\]»”’]*\s+|[。！？]+|\n+/g;
+
+/// Markdown reads fine on screen but is spoken aloud as punctuation.
+const speakable = (text) => text
+  .replace(/^\s*(?:#+|[-*+]|\d+\.)\s+/gm, '')
+  .replace(/\*\*|__|`/g, '')
+  .trim();
+
+/// Cuts a reply into the pieces it is spoken in. A piece only ends at a
+/// sentence boundary the text has already moved past, so while the reply is
+/// still arriving (`final: false`) the unfinished tail is held back and every
+/// piece returned is exactly the piece the finished text will produce.
+export const splitSpeechChunks = (text, { final = true } = {}) => {
+  const chunks = [];
+  let start = 0;
+  for (const match of text.matchAll(sentenceBoundary)) {
+    const end = match.index + match[0].length;
+    const piece = speakable(text.slice(start, end));
+    const target = chunks.length ? SPEECH_CHUNK_CHARACTERS : FIRST_SPEECH_CHUNK_CHARACTERS;
+    if (piece.length >= target) {
+      chunks.push(piece);
+      start = end;
+    }
+  }
+  const rest = speakable(text.slice(start));
+  if (final && rest) chunks.push(rest);
+  return chunks;
+};
+
+/// Speaks a reply while it is still being written. Each finished sentence is
+/// sent for synthesis the moment it lands, and all pieces are synthesized in
+/// parallel, so the audio is ready soon after the text rather than one full
+/// synthesis later. Text the model retracts (`reset`) is dropped; `finish`
+/// reconciles with the saved reply, reusing every piece that still matches.
+export const createSpeechPipeline = ({ voice, isCancelled = () => false } = {}) => {
+  let text = '';
+  let jobs = [];
+
+  const schedule = (chunks) => {
+    jobs = jobs.slice(0, chunks.length);
+    chunks.forEach((chunk, index) => {
+      if (jobs[index]?.text === chunk) return;
+      jobs = jobs.slice(0, index);
+      if (isCancelled()) return;
+      const audio = synthesizeSpeech(chunk, voice);
+      // Awaited in order by `finish`, or never if the text is retracted.
+      audio.catch(() => {});
+      jobs[index] = { text: chunk, audio };
+    });
+  };
+
+  return {
+    push(delta) {
+      text += delta;
+      schedule(splitSpeechChunks(text, { final: false }));
+    },
+    reset() {
+      text = '';
+      jobs = [];
+    },
+    /// Hands each piece to `emit` in order, as soon as it and every piece
+    /// before it are ready.
+    async finish(finalText, emit) {
+      const chunks = splitSpeechChunks(finalText);
+      schedule(chunks);
+      for (let index = 0; index < chunks.length; index += 1) {
+        if (isCancelled() || !jobs[index]) return;
+        emit({ index, last: index === chunks.length - 1, speech: await jobs[index].audio });
+      }
+    }
+  };
 };
 
 export const synthesizeSpeech = async (input, requestedVoice) => {

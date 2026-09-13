@@ -25,7 +25,7 @@ beforeAll(async () => {
   process.env.AI_PROVIDER = 'gemini';
   process.env.GEMINI_API_KEY = 'test-key';
   process.env.OPENAI_API_KEY = 'test-openai-key';
-  process.env.OPENAI_REASONING_EFFORT = 'low';
+  process.env.OPENAI_REASONING_EFFORT = 'none';
   process.env.OPENAI_TRANSCRIBE_MODEL = 'gpt-transcribe';
   process.env.OPENAI_TTS_MODEL = 'tts-1';
   process.env.OPENAI_TTS_VOICE = 'alloy';
@@ -66,7 +66,7 @@ describe('foundation and authentication', () => {
       '/users/me', '/users/me/password', '/users/me/notification-preferences', '/users/me/calendars', '/users/me/subscription-management', '/users/me/deletion',
       '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
-      '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
+      '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
       '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password'
     ];
     expect(Object.keys(docs.body.paths).sort()).toEqual(documentedPaths.sort());
@@ -456,6 +456,90 @@ describe('network, subscriptions, notifications, and AI', () => {
     expect((await models.AiUsage.findOne({ calendarId })).requestCount).toBe(1);
   });
 
+  it('streams a voice turn: transcript first, then the answer, then its speech piece by piece', async () => {
+    const user = await register('voice-stream@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email: 'voice-stream@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const aiModule = await import('../services/ai.service.js');
+    const transcribe = vi.fn(async () => ({ text: 'What is on my calendar tomorrow?', usage: { type: 'duration', seconds: 2 } }));
+    const answer = ['You have no events tomorrow. ', 'Enjoy the **free** day!'];
+    const createResponse = vi.fn(async () => (async function* generate() {
+      for (const delta of answer) yield { type: 'response.output_text.delta', delta };
+      yield {
+        type: 'response.completed',
+        response: { output: [], output_text: answer.join(''), usage: { input_tokens: 18, output_tokens: 9 } }
+      };
+    })());
+    // Each piece of "audio" is just its own text, so the order can be checked.
+    const createSpeech = vi.fn(async ({ input }) => ({ arrayBuffer: async () => new TextEncoder().encode(input).buffer }));
+    aiModule.setAiProviderClientForTests('openai', {
+      responses: { create: createResponse },
+      audio: { transcriptions: { create: transcribe }, speech: { create: createSpeech } }
+    });
+
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    const sendVoice = (fields) => {
+      const call = request(app)
+        .post(`/api/v1/ai/conversations/${conversation.body.data._id}/voice-messages/stream`)
+        .set(auth(token));
+      for (const [key, value] of Object.entries(fields)) call.field(key, value);
+      return call
+        .attach('audio', Buffer.from('test webm audio'), { filename: 'message.webm', contentType: 'audio/webm' })
+        .buffer(true)
+        .parse((res, callback) => {
+          let body = '';
+          res.on('data', (chunk) => { body += chunk; });
+          res.on('end', () => callback(null, body));
+        })
+        .expect(200);
+    };
+    const eventsOf = (response) => response.body
+      .split('\n\n')
+      .filter((block) => block.startsWith('data: '))
+      .map((block) => JSON.parse(block.slice(6)));
+
+    const spoken = eventsOf(await sendVoice({ voice: 'nova' }));
+    expect(spoken.map((event) => event.type)).toEqual(['transcript', 'delta', 'delta', 'done', 'audio', 'audio']);
+    expect(spoken[0].transcription.text).toBe('What is on my calendar tomorrow?');
+    expect(spoken[3].message.content).toBe(answer.join(''));
+    expect(spoken[3].transcription.text).toBe('What is on my calendar tomorrow?');
+    const audio = spoken.filter((event) => event.type === 'audio');
+    expect(audio.map((event) => Buffer.from(event.base64, 'base64').toString())).toEqual([
+      'You have no events tomorrow.', 'Enjoy the free day!'
+    ]);
+    expect(audio.map((event) => event.last)).toEqual([false, true]);
+    // The first sentence was sent for synthesis while the answer was still
+    // streaming, and reused rather than synthesized twice.
+    expect(createSpeech).toHaveBeenCalledTimes(2);
+    expect(createSpeech.mock.calls[0][0]).toMatchObject({ voice: 'nova', response_format: 'mp3' });
+    expect(createResponse.mock.calls[0][0].instructions).toContain('spoken interaction');
+    expect(createResponse.mock.calls[0][0].instructions).toContain("language of the user's latest message");
+    expect(createResponse.mock.calls[0][0].reasoning).toEqual({ effort: 'none' });
+
+    // A muted client asks for no speech at all.
+    const muted = eventsOf(await sendVoice({ speak: 'false' }));
+    expect(muted.map((event) => event.type)).toEqual(['transcript', 'delta', 'delta', 'done']);
+    expect(createSpeech).toHaveBeenCalledTimes(2);
+    expect((await models.AiUsage.findOne({ calendarId })).requestCount).toBe(2);
+  });
+
+  it('splits a streaming reply into exactly the speech pieces the finished reply produces', async () => {
+    const { splitSpeechChunks } = await import('../services/ai/audio.js');
+    const reply = 'Sure! I moved the 3.5 hour workshop to Friday at 9am. Your afternoon stays free for the dentist, '
+      + 'and I kept the reminder at thirty minutes. Anything else you want me to change before the week starts?\n- Call Ana';
+    const pieces = splitSpeechChunks(reply);
+    expect(pieces[0]).toBe('Sure!');
+    expect(pieces.at(-1)).toBe('Call Ana');
+    for (let length = 0; length <= reply.length; length += 1) {
+      const partial = splitSpeechChunks(reply.slice(0, length), { final: false });
+      expect(pieces.slice(0, partial.length)).toEqual(partial);
+    }
+    // Replies in other languages start speaking at their first sentence too.
+    expect(splitSpeechChunks('ঠিক আছে। শুক্রবার সকাল নয়টায় মিটিং রাখা হয়েছে।')[0]).toBe('ঠিক আছে।');
+    expect(splitSpeechChunks('好的。会议已安排在周五上午九点。')[0]).toBe('好的。');
+  });
+
   it('falls back from Gemini to OpenAI without persisting the failed attempt action', async () => {
     const user = await register('fallback-openai@example.com').expect(201);
     const token = user.body.data.accessToken;
@@ -670,6 +754,7 @@ describe('notes', () => {
     const aiModule = await import('../services/ai.service.js');
     const transcribe = vi.fn(async () => ({
       text: 'Book the dentist before the end of the month. Mornings are better.',
+      languages: [{ code: 'en' }],
       usage: { type: 'duration', seconds: 9 }
     }));
     aiModule.setAiProviderClientForTests('openai', {
@@ -689,7 +774,7 @@ describe('notes', () => {
       title: 'Book the dentist before the end of the month.',
       body: 'Book the dentist before the end of the month. Mornings are better.'
     });
-    expect(spoken.body.data.note.voice.durationSeconds).toBe(9);
+    expect(spoken.body.data.note.voice).toMatchObject({ durationSeconds: 9, languages: ['en'] });
   });
 });
 

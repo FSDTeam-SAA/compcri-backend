@@ -74,7 +74,7 @@ describe('AI provider adapters', () => {
 
     const firstRequest = create.mock.calls[0][0];
     const secondRequest = create.mock.calls[1][0];
-    expect(firstRequest).toMatchObject({ store: false, reasoning: { effort: 'low' }, parallel_tool_calls: true });
+    expect(firstRequest).toMatchObject({ store: false, reasoning: { effort: 'none' }, parallel_tool_calls: true });
     expect(firstRequest.input[0]).toEqual({ role: 'assistant', content: 'Earlier answer' });
     expect(secondRequest.input).toContain(functionCall);
     expect(secondRequest.input).toContainEqual({ type: 'function_call_output', call_id: 'call-openai', output: JSON.stringify({ output: [] }) });

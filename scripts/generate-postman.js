@@ -152,6 +152,8 @@ for (const [path, pathItem] of Object.entries(openapi.paths)) {
       request.body = { mode: 'formdata', formdata: [{ key: 'image', type: 'file', src: '' }] };
     } else if (path === '/ai/conversations/{id}/voice-messages' && upperMethod === 'POST') {
       request.body = { mode: 'formdata', formdata: [{ key: 'voice', value: 'alloy', type: 'text' }, { key: 'audio', type: 'file', src: '' }] };
+    } else if (path === '/ai/conversations/{id}/voice-messages/stream' && upperMethod === 'POST') {
+      request.body = { mode: 'formdata', formdata: [{ key: 'voice', value: 'alloy', type: 'text' }, { key: 'speak', value: 'true', type: 'text' }, { key: 'audio', type: 'file', src: '' }] };
     } else if (sampleBodies[key]) {
       request.header.push({ key: 'Content-Type', value: 'application/json' });
       request.body = { mode: 'raw', raw: JSON.stringify(sampleBodies[key], null, 2), options: { raw: { language: 'json' } } };

@@ -2330,6 +2330,31 @@
           ]
         },
         {
+          "name": "POST — Send text message and stream the reply as server-sent events",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/ai/conversations/{{conversationId}}/messages/stream",
+            "description": "Send text message and stream the reply as server-sent events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Success response contract', function () { pm.expect(pm.response.code).to.be.within(200, 299); pm.expect(pm.response.json().success).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "POST — Send audio and receive a transcribed AI reply with MP3 speech",
           "request": {
             "method": "POST",
@@ -2365,6 +2390,51 @@
                 "exec": [
                   "pm.test('Success response contract', function () { pm.expect(pm.response.code).to.be.within(200, 299); pm.expect(pm.response.json().success).to.eql(true); });",
                   "const data = pm.response.json().data; const action = data?.pendingActions?.[0]; if (action?._id) pm.environment.set('aiActionId', action._id); if (data?.message?._id) pm.environment.set('messageId', data.message._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST — Send audio and stream the transcript, AI reply, and sentence-by-sentence MP3 speech as server-sent events (transcript, delta, tools, reset, done, audio, audio_error, error)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/ai/conversations/{{conversationId}}/voice-messages/stream",
+            "description": "Send audio and stream the transcript, AI reply, and sentence-by-sentence MP3 speech as server-sent events (transcript, delta, tools, reset, done, audio, audio_error, error)",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "voice",
+                  "value": "alloy",
+                  "type": "text"
+                },
+                {
+                  "key": "speak",
+                  "value": "true",
+                  "type": "text"
+                },
+                {
+                  "key": "audio",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Success response contract', function () { pm.expect(pm.response.code).to.be.within(200, 299); pm.expect(pm.response.json().success).to.eql(true); });"
                 ]
               }
             }
