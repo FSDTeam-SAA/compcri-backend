@@ -1,4 +1,5 @@
 import { StatusCodes } from 'http-status-codes';
+import { requestLocale, translate } from '../utils/i18n.js';
 
 const globalErrorHandler = (err, req, res, next) => {
   let statusCode = err.statusCode || StatusCodes.INTERNAL_SERVER_ERROR;
@@ -41,11 +42,17 @@ const globalErrorHandler = (err, req, res, next) => {
     code = 'INVALID_TOKEN';
   }
 
+  // People read `message`; `code` stays stable for clients to branch on.
+  const locale = requestLocale(req);
+  if (Array.isArray(details)) {
+    details = details.map((item) => (item?.message ? { ...item, message: translate(locale, item.message) } : item));
+  }
+
   res.status(statusCode).json({
     success: false,
     error: {
       code,
-      message,
+      message: translate(locale, message),
       ...(details && { details }),
       requestId: req.id,
       ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })

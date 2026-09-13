@@ -57,6 +57,7 @@ export const openapi = {
     '/media/{id}/replace': { put: operation('Replace an owned image while preserving its target', { parameters: [id('id')] }) },
     '/calendars/{calendarId}/events': { get: operation('List expanded event occurrences', { parameters: [id('calendarId')] }), post: operation('Create event', { parameters: [id('calendarId')], requestBody: { $ref: '#/components/schemas/EventInput' }, status: 201 }) },
     '/calendars/{calendarId}/availability': { get: operation('Find premium free-time slots', { parameters: [id('calendarId')] }) },
+    '/calendars/{calendarId}/conflicts': { get: operation('Check a proposed time (startsAt, endsAt, optional excludeEventId) for overlapping events and the nearest free alternatives', { parameters: [id('calendarId')] }) },
     '/calendars/{calendarId}/settings': { get: operation('Get calendar settings', { parameters: [id('calendarId')] }), patch: operation('Update owned calendar settings', { parameters: [id('calendarId')] }) },
     '/events/shared': { get: operation('List direct and dynamically resolved group-shared event occurrences') },
     '/events/{eventId}': { get: operation('Get accessible event', { parameters: [id('eventId')] }), patch: operation('Update event with optimistic version', { parameters: [id('eventId')] }), delete: operation('Cancel event with optimistic version', { parameters: [id('eventId')] }) },

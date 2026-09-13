@@ -140,6 +140,7 @@ const stagePendingAction = async (conversation, userId, calendarId, name, args) 
   const startsAt = args.startsAt && new Date(args.startsAt);
   const endsAt = args.endsAt && new Date(args.endsAt);
   if (startsAt && endsAt) conflicts = await eventService.findConflicts(calendarId, startsAt, endsAt, args.eventId);
+  const suggestedTimes = await eventService.alternativesFor(calendarId, startsAt, endsAt, conflicts, args.eventId);
   return new PendingAiAction({
     conversationId: conversation._id,
     requestedById: userId,
@@ -148,6 +149,7 @@ const stagePendingAction = async (conversation, userId, calendarId, name, args) 
     payload: args,
     eventVersion: args.version,
     conflictWarnings: conflicts,
+    suggestedTimes,
     expiresAt: new Date(Date.now() + 10 * 60_000)
   });
 };
@@ -586,7 +588,10 @@ export const quotaStatus = async (userId, calendarId) => {
   };
 };
 
-export const confirmAction = async (userId, actionId, overrideConflicts) => {
+/// `startsAt`/`endsAt` book an event proposal at a different time — one of its
+/// suggested free times — while the rest of the proposal stands.
+export const confirmAction = async (userId, actionId, overrideConflicts, { startsAt, endsAt } = {}) => {
+  const retimed = startsAt && endsAt ? { startsAt, endsAt } : {};
   const now = new Date();
   const action = await PendingAiAction.findOneAndUpdate(
     { _id: actionId, requestedById: userId, status: 'PENDING', expiresAt: { $gt: now } },
@@ -612,6 +617,7 @@ export const confirmAction = async (userId, actionId, overrideConflicts) => {
     if (action.type === 'CREATE_EVENT') {
       result = await eventService.createEvent(userId, action.calendarId, {
         ...action.payload,
+        ...retimed,
         reminderMinutes: action.payload.reminderMinutes || [],
         overrideConflicts
       });
@@ -619,6 +625,7 @@ export const confirmAction = async (userId, actionId, overrideConflicts) => {
       const { eventId, ...changes } = action.payload;
       result = await eventService.updateEvent(userId, eventId, {
         ...changes,
+        ...retimed,
         version: action.eventVersion,
         overrideConflicts
       });
@@ -626,6 +633,10 @@ export const confirmAction = async (userId, actionId, overrideConflicts) => {
       result = await noteService.createNote(userId, action.calendarId, action.payload);
     } else {
       result = await eventService.deleteEvent(userId, action.payload.eventId, action.eventVersion);
+    }
+    // The saved proposal records the time that was actually booked.
+    if (retimed.startsAt && ['CREATE_EVENT', 'UPDATE_EVENT'].includes(action.type)) {
+      action.payload = { ...action.payload, ...retimed };
     }
     action.status = 'CONFIRMED';
     action.executedAt = new Date();

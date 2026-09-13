@@ -1,6 +1,7 @@
 import { StatusCodes } from 'http-status-codes';
 import catchAsync from '../utils/catchAsync.js';
 import { sendSuccess } from '../utils/response.js';
+import { requestLocale, translate } from '../utils/i18n.js';
 import * as authService from '../services/auth.service.js';
 import { audit } from '../services/audit.service.js';
 
@@ -32,7 +33,7 @@ export const logout = catchAsync(async (req, res) => {
 });
 export const forgotPassword = catchAsync(async (req, res) => {
   await authService.requestPasswordReset(req.body.email);
-  sendSuccess(res, { message: 'If the account exists, a reset code has been sent' });
+  sendSuccess(res, { message: translate(requestLocale(req), 'If the account exists, a reset code has been sent') });
 });
 export const verifyOtp = catchAsync(async (req, res) => sendSuccess(res, await authService.verifyResetOtp(req.body.email, req.body.code)));
 export const resetPassword = catchAsync(async (req, res) => {

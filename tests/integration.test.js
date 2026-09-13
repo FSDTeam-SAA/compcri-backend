@@ -64,7 +64,7 @@ describe('foundation and authentication', () => {
     const documentedPaths = [
       '/auth/register', '/auth/login', '/auth/google', '/auth/refresh', '/auth/logout', '/auth/forgot-password', '/auth/verify-reset-otp', '/auth/reset-password', '/auth/cancel-deletion',
       '/users/me', '/users/me/password', '/users/me/notification-preferences', '/users/me/calendars', '/users/me/subscription-management', '/users/me/deletion',
-      '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
+      '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/conflicts','/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
       '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
       '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password'
@@ -168,6 +168,89 @@ describe('calendar, quota, conflicts, and delegation', () => {
 
     const stale = await request(app).patch(`/api/v1/events/${event.body.data.event._id}`).set(auth(token)).send({ title: 'Changed', version: 99 }).expect(409);
     expect(stale.body.error.code).toBe('EVENT_VERSION_CONFLICT');
+  });
+
+  it('checks a proposed time live and suggests the nearest free alternatives', async () => {
+    const created = await register('conflict-check@example.com').expect(201);
+    const token = created.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email: 'conflict-check@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const at = (time) => `${tomorrow}T${time}:00.000Z`;
+    const existing = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({
+      title: 'Standup', startsAt: at('09:00'), endsAt: at('10:00'), timeZone: 'UTC', reminderMinutes: []
+    }).expect(201);
+    const check = (query) => request(app).get(`/api/v1/calendars/${calendarId}/conflicts`).query(query).set(auth(token)).expect(200);
+
+    const clash = (await check({ startsAt: at('09:30'), endsAt: at('10:30') })).body.data;
+    expect(clash.enforced).toBe(true);
+    expect(clash.conflicts).toEqual([expect.objectContaining({ title: 'Standup', startsAt: at('09:00'), endsAt: at('10:00') })]);
+    // Nearest first: straight after the clash, same length as the request.
+    expect(clash.alternatives[0]).toEqual({ startsAt: at('10:00'), endsAt: at('11:00'), reason: 'AFTER_CONFLICT' });
+    expect(clash.alternatives.length).toBeLessThanOrEqual(5);
+
+    const free = (await check({ startsAt: at('13:00'), endsAt: at('14:00') })).body.data;
+    expect(free).toMatchObject({ conflicts: [], alternatives: [] });
+    // Moving the event itself never clashes with its own old time.
+    const moving = (await check({ startsAt: at('09:30'), endsAt: at('10:30'), excludeEventId: existing.body.data.event._id })).body.data;
+    expect(moving.conflicts).toEqual([]);
+
+    // A save that clashes gets the same suggestions back with the refusal.
+    const refused = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({
+      title: 'Overlap', startsAt: at('09:30'), endsAt: at('10:30'), timeZone: 'UTC', reminderMinutes: []
+    }).expect(409);
+    expect(refused.body.error.details.alternatives[0]).toMatchObject({ startsAt: at('10:00'), reason: 'AFTER_CONFLICT' });
+  });
+
+  it('lets an assistant proposal be booked at one of its suggested free times', async () => {
+    const created = await register('ai-retime@example.com').expect(201);
+    const token = created.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email: 'ai-retime@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const at = (time) => `${tomorrow}T${time}:00.000Z`;
+    await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({
+      title: 'Standup', startsAt: at('09:00'), endsAt: at('10:00'), timeZone: 'UTC', reminderMinutes: []
+    }).expect(201);
+    const aiModule = await import('../services/ai.service.js');
+    const responses = [
+      { functionCalls: [{ id: 'retime', name: 'propose_create_event', args: { title: 'Dentist', startsAt: at('09:30'), endsAt: at('10:30'), timeZone: 'UTC' } }], usageMetadata: {} },
+      { text: 'That overlaps Standup, so pick a time.', usageMetadata: {} }
+    ];
+    aiModule.setAiClientForTests({ chats: { create: () => ({ sendMessage: vi.fn(async () => responses.shift()) }) } });
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    const reply = await request(app).post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages`).set(auth(token)).send({ content: 'Dentist tomorrow 9:30' }).expect(200);
+    const [action] = reply.body.data.pendingActions;
+    expect(action.conflictWarnings).toHaveLength(1);
+    const [suggestion] = action.suggestedTimes;
+    expect(suggestion).toMatchObject({ startsAt: at('10:00'), endsAt: at('11:00'), reason: 'AFTER_CONFLICT' });
+
+    await request(app).post(`/api/v1/ai/actions/${action._id}/confirm`).set(auth(token))
+      .send({ overrideConflicts: false, startsAt: suggestion.startsAt, endsAt: suggestion.endsAt }).expect(200);
+    const booked = await models.Event.findOne({ title: 'Dentist' });
+    expect(booked.startsAt.toISOString()).toBe(at('10:00'));
+    expect(booked.endsAt.toISOString()).toBe(at('11:00'));
+  });
+
+  it('answers in the requester\'s language: errors, profiles, and notifications', async () => {
+    // Before sign-in, the language the app is showing decides.
+    const anonymous = await request(app).get('/api/v1/users/me').set('Accept-Language', 'pt-BR').expect(401);
+    expect(anonymous.body.error).toMatchObject({ code: 'AUTH_REQUIRED', message: 'Entre na sua conta para continuar' });
+
+    // A new account keeps the language it signed up in and is answered in it.
+    const created = await request(app).post('/api/v1/auth/register').send({
+      email: 'hola@example.com', password: 'SecurePassword123!', displayName: 'Hola', timeZone: 'UTC', termsVersion: 'v1', termsAccepted: true, locale: 'es'
+    }).expect(201);
+    expect(created.body.data.user.locale).toBe('es');
+    const missing = await request(app).get('/api/v1/ai/conversations/000000000000000000000000').set(auth(created.body.data.accessToken)).expect(404);
+    expect(missing.body.error).toMatchObject({ code: 'CONVERSATION_NOT_FOUND', message: 'Conversación no encontrada' });
+
+    const { createNotification } = await import('../services/notification.service.js');
+    const notification = await createNotification(created.body.data.user._id, 'GROUP_UPDATE', 'Added to a group', 'You were added to {group}', {}, { group: 'Club de lectura' });
+    expect(notification).toMatchObject({ title: 'Añadido a un grupo', body: 'Te añadieron a Club de lectura' });
+
+    const { formatDateTime } = await import('../utils/i18n.js');
+    expect(formatDateTime('pt', new Date('2026-09-14T12:30:00.000Z'), 'America/Sao_Paulo')).toContain('09:30');
   });
 
   it('blocks the 51st owned monthly occurrence on the free plan', async () => {

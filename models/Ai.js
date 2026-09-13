@@ -26,6 +26,7 @@ const pendingAiActionSchema = new mongoose.Schema({
   payload: { type: mongoose.Schema.Types.Mixed, required: true },
   eventVersion: Number,
   conflictWarnings: [mongoose.Schema.Types.Mixed],
+  suggestedTimes: [mongoose.Schema.Types.Mixed],
   status: { type: String, enum: ['PENDING', 'EXECUTING', 'CONFIRMED', 'REJECTED', 'EXPIRED'], default: 'PENDING' },
   expiresAt: { type: Date, required: true, index: { expires: 86400 } },
   executedAt: Date,

@@ -1,6 +1,7 @@
 import catchAsync from '../utils/catchAsync.js';
 import { sendSuccess } from '../utils/response.js';
 import * as service from '../services/ai.service.js';
+import { requestLocale, translate } from '../utils/i18n.js';
 
 export const createConversation = catchAsync(async (req, res) => sendSuccess(res, await service.createConversation(req.user._id, req.body.calendarId, req.body.title), { status: 201 }));
 export const listConversations = catchAsync(async (req, res) => sendSuccess(res, await service.listConversations(req.user._id, req.query.search)));
@@ -39,7 +40,11 @@ const eventStream = (run) => async (req, res, next) => {
         if (!res.writableEnded) res.write(': ping\n\n');
       }, SSE_HEARTBEAT_MS);
     }
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    // A failure mid-stream is read by the person waiting, in their language.
+    const readable = payload.message && ['error', 'audio_error'].includes(payload.type)
+      ? { ...payload, message: translate(requestLocale(req), payload.message) }
+      : payload;
+    res.write(`data: ${JSON.stringify(readable)}\n\n`);
   };
 
   try {
@@ -95,5 +100,5 @@ export const sendVoiceMessage = catchAsync(async (req, res) => sendSuccess(
 export const editMessage = catchAsync(async (req, res) => sendSuccess(res, await service.editMessage(req.user._id, req.params.id, req.params.messageId, req.body.content)));
 export const deleteMessage = catchAsync(async (req, res) => { await service.deleteMessage(req.user._id, req.params.id, req.params.messageId); sendSuccess(res, { deleted: true }); });
 export const quota = catchAsync(async (req, res) => sendSuccess(res, await service.quotaStatus(req.user._id, req.query.calendarId)));
-export const confirmAction = catchAsync(async (req, res) => sendSuccess(res, await service.confirmAction(req.user._id, req.params.id, req.body.overrideConflicts)));
+export const confirmAction = catchAsync(async (req, res) => sendSuccess(res, await service.confirmAction(req.user._id, req.params.id, req.body.overrideConflicts, req.body)));
 export const rejectAction = catchAsync(async (req, res) => sendSuccess(res, await service.rejectAction(req.user._id, req.params.id)));

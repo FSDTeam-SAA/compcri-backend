@@ -4,6 +4,7 @@ import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
 import { env } from '../config/env.js';
 import User from '../models/User.js';
+import { translate } from '../utils/i18n.js';
 import Session from '../models/Session.js';
 import Otp from '../models/Otp.js';
 import Calendar from '../models/Calendar.js';
@@ -62,6 +63,7 @@ export const register = async (input, context) => {
         email: input.email,
         passwordHash,
         displayName: input.displayName,
+        ...(input.locale && { locale: input.locale }),
         contactCode,
         revenueCatAppUserId
       }], { session });
@@ -120,6 +122,7 @@ export const loginWithGoogle = async (input, context) => {
           email: payload.email,
           googleSubject: payload.sub,
           displayName: payload.name,
+          ...(input.locale && { locale: input.locale }),
           contactCode: await uniqueContactCode(payload.name || 'USR'),
           revenueCatAppUserId: randomUuid()
         }], { session });
@@ -177,8 +180,8 @@ export const requestPasswordReset = async (email) => {
   await Otp.create({ email, purpose: 'PASSWORD_RESET', codeHash: sha256(code), expiresAt: new Date(Date.now() + 10 * 60_000) });
   await sendMail({
     to: email,
-    subject: `${env.APP_NAME} password reset code`,
-    text: `Your password reset code is ${code}. It expires in 10 minutes.`
+    subject: translate(user.locale, '{app} password reset code', { app: env.APP_NAME }),
+    text: translate(user.locale, 'Your password reset code is {code}. It expires in 10 minutes.', { code })
   });
 };
 

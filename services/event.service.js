@@ -98,8 +98,8 @@ const isPremiumCalendar = async (calendar) => {
   return hasPremiumAccess(owner);
 };
 
-const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, durationMinutes) => {
-  const events = await candidateEvents(calendarId, rangeStart, rangeEnd);
+const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, durationMinutes, excludeId) => {
+  const events = await candidateEvents(calendarId, rangeStart, rangeEnd, excludeId);
   const busy = events.flatMap((event) => expandEvent(event, rangeStart, rangeEnd));
   const slots = [];
   const duration = durationMinutes * 60_000;
@@ -125,16 +125,80 @@ const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, d
   return slots.slice(0, 20);
 };
 
-const conflictDetails = async (calendar, calendarId, startsAt, endsAt, conflicts) => ({
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SUGGESTION_ROUNDING_MS = 15 * 60_000;
+const MAX_ALTERNATIVES = 5;
+
+/// Free times worth offering instead of a clashing one, nearest to what was
+/// asked for first: right after or right before the clash when that is free,
+/// then open gaps within working hours over the next week. Each carries a
+/// `reason` (`AFTER_CONFLICT`, `BEFORE_CONFLICT` or `FREE_SLOT`) for the label.
+/// `excludeId` is the event being moved, whose own time is not in the way.
+const suggestAlternatives = async (calendar, calendarId, startsAt, endsAt, conflicts, excludeId) => {
+  if (!conflicts.length) return [];
+  const duration = Math.min(Math.max(Math.ceil((endsAt - startsAt) / 60_000), 5), 1440) * 60_000;
+  const earliest = new Date(Math.ceil(Date.now() / SUGGESTION_ROUNDING_MS) * SUGGESTION_ROUNDING_MS);
+  const isFree = async (from) => from >= earliest
+    && !(await findConflicts(calendarId, from, new Date(from.getTime() + duration), excludeId)).length;
+
+  const candidates = [];
+  const after = new Date(Math.max(...conflicts.map((conflict) => new Date(conflict.endsAt).getTime())));
+  if (await isFree(after)) candidates.push({ startsAt: after, reason: 'AFTER_CONFLICT' });
+  const before = new Date(Math.min(...conflicts.map((conflict) => new Date(conflict.startsAt).getTime())) - duration);
+  if (await isFree(before)) candidates.push({ startsAt: before, reason: 'BEFORE_CONFLICT' });
+
+  const dayStart = DateTime.fromJSDate(startsAt, { zone: calendar.timeZone }).startOf('day').toJSDate();
+  const rangeStart = new Date(Math.max(dayStart.getTime(), earliest.getTime()));
+  const rangeEnd = new Date(Math.max(startsAt.getTime(), rangeStart.getTime()) + 7 * DAY_MS);
+  const slots = await computeAvailability(calendar, calendarId, rangeStart, rangeEnd, duration / 60_000, excludeId);
+  for (const slot of slots) candidates.push({ startsAt: slot.startsAt, reason: 'FREE_SLOT' });
+
+  const seen = new Set();
+  return candidates
+    .filter((candidate) => {
+      const key = candidate.startsAt.getTime();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Math.abs(a.startsAt - startsAt) - Math.abs(b.startsAt - startsAt))
+    .slice(0, MAX_ALTERNATIVES)
+    .map((candidate) => ({
+      startsAt: candidate.startsAt,
+      endsAt: new Date(candidate.startsAt.getTime() + duration),
+      reason: candidate.reason
+    }));
+};
+
+const conflictDetails = async (calendar, calendarId, startsAt, endsAt, conflicts, excludeId) => ({
   conflicts,
-  alternatives: await computeAvailability(
-    calendar,
-    calendarId,
-    startsAt,
-    new Date(startsAt.getTime() + 7 * 24 * 60 * 60 * 1000),
-    Math.min(Math.max(Math.ceil((endsAt - startsAt) / 60_000), 5), 1440)
-  )
+  alternatives: await suggestAlternatives(calendar, calendarId, startsAt, endsAt, conflicts, excludeId)
 });
+
+/// What saving this time would run into, without saving anything: the
+/// clashing occurrences and the nearest free alternatives. `enforced` says
+/// whether a save would be refused (overlaps block saves on premium calendars;
+/// elsewhere they are only a heads-up).
+export const checkConflicts = async (userId, calendarId, from, to, excludeEventId) => {
+  const startsAt = new Date(from);
+  const endsAt = new Date(to);
+  validateRange(startsAt, endsAt);
+  const access = await getCalendarAccess(userId, calendarId);
+  const conflicts = await findConflicts(calendarId, startsAt, endsAt, excludeEventId);
+  return {
+    conflicts,
+    alternatives: await suggestAlternatives(access.calendar, calendarId, startsAt, endsAt, conflicts, excludeEventId),
+    enforced: await isPremiumCalendar(access.calendar)
+  };
+};
+
+/// Alternatives for a time proposed outside an event save, such as the
+/// assistant's proposals.
+export const alternativesFor = async (calendarId, startsAt, endsAt, conflicts, excludeId) => {
+  if (!conflicts.length) return [];
+  const calendar = await Calendar.findById(calendarId);
+  return calendar ? suggestAlternatives(calendar, calendarId, startsAt, endsAt, conflicts, excludeId) : [];
+};
 
 export const listEvents = async (userId, calendarId, from, to, search) => {
   const rangeStart = new Date(from);
@@ -245,7 +309,7 @@ export const updateEvent = async (userId, eventId, input) => {
   }
   const premium = await isPremiumCalendar(calendar);
   const conflicts = premium ? await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id) : [];
-  if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts));
+  if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts, access.event._id));
   const { version, overrideConflicts, ...changes } = input;
   const oldPosterId = access.event.posterMediaId;
   if (input.posterMediaId) await claimMedia({ mediaId: input.posterMediaId, ownerId: userId, purpose: 'EVENT_POSTER', claimedByType: 'EVENT', claimedById: access.event._id });
@@ -299,7 +363,7 @@ export const setRecurrenceException = async (userId, eventId, input) => {
   if (!input.cancelled && (overrides.startsAt || overrides.endsAt)) {
     const calendar = access.calendarAccess?.calendar || await Calendar.findById(access.event.calendarId);
     if (await isPremiumCalendar(calendar)) conflicts = await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id);
-    if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Occurrence overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts));
+    if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Occurrence overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts, access.event._id));
   }
 
   access.event.recurrenceExceptions = access.event.recurrenceExceptions.filter((item) => item.originalStartAt.getTime() !== originalStartAt.getTime());

@@ -12,4 +12,13 @@ export const voiceMessageBody = z.object({ voice: z.enum(OPENAI_TTS_VOICES).opti
 export const voiceStreamBody = voiceMessageBody.extend({
   speak: z.enum(['true', 'false']).default('true').transform((value) => value === 'true')
 });
-export const confirmActionBody = z.object({ overrideConflicts: z.boolean().default(false) });
+const isoDate = z.string().datetime({ offset: true });
+// `startsAt`/`endsAt` book the proposal at one of its suggested free times.
+export const confirmActionBody = z.object({
+  overrideConflicts: z.boolean().default(false),
+  startsAt: isoDate.optional(),
+  endsAt: isoDate.optional()
+}).refine(
+  (body) => Boolean(body.startsAt) === Boolean(body.endsAt) && (!body.startsAt || new Date(body.endsAt) > new Date(body.startsAt)),
+  { message: 'startsAt and endsAt go together, and endsAt must be after startsAt', path: ['endsAt'] }
+);

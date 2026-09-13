@@ -151,7 +151,7 @@ export const addGroupMember = async (actorId, groupId, userId, role) => {
   if (group.members.some((member) => member.userId.toString() === userId.toString())) throw new ApiError(409, 'User is already a member', 'GROUP_MEMBER_EXISTS');
   group.members.push({ userId, role });
   await group.save();
-  await createNotification(userId, 'GROUP_UPDATE', 'Added to a group', `You were added to ${group.name}`, { groupId });
+  await createNotification(userId, 'GROUP_UPDATE', 'Added to a group', 'You were added to {group}', { groupId }, { group: group.name });
   return group;
 };
 
@@ -205,7 +205,7 @@ export const transferGroupOwnership = async (userId, groupId, successorId) => {
   successor.role = 'OWNER';
   group.ownerId = successor.userId;
   await group.save();
-  await createNotification(successorId, 'GROUP_UPDATE', 'Group ownership transferred', `You now own ${group.name}`, { groupId });
+  await createNotification(successorId, 'GROUP_UPDATE', 'Group ownership transferred', 'You now own {group}', { groupId }, { group: group.name });
   return group;
 };
 
@@ -217,7 +217,7 @@ export const inviteGroupMember = async (actorId, groupId, recipientId, role) => 
   if (!(await User.exists({ _id: recipientId, status: 'ACTIVE' }))) throw new ApiError(404, 'User not found', 'USER_NOT_FOUND');
   try {
     const invitation = await GroupInvitation.create({ groupId, inviterId: actorId, recipientId, role });
-    await createNotification(recipientId, 'INVITATION', 'Group invitation', `You were invited to ${group.name}`, { groupId, invitationId: invitation._id });
+    await createNotification(recipientId, 'INVITATION', 'Group invitation', 'You were invited to {group}', { groupId, invitationId: invitation._id }, { group: group.name });
     return invitation;
   } catch (error) {
     if (error.code === 11000) throw new ApiError(409, 'A group invitation is already pending', 'GROUP_INVITATION_EXISTS');

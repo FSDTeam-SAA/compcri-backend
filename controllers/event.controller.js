@@ -17,7 +17,8 @@ export const complete = catchAsync(async (req, res) => sendSuccess(res, await se
 export const share = catchAsync(async (req, res) => sendSuccess(res, await service.shareEvent(req.user._id, req.params.eventId, req.body)));
 export const rsvp = catchAsync(async (req, res) => sendSuccess(res, await service.respondToEvent(req.user._id, req.params.eventId, req.body.status)));
 export const availability = catchAsync(async (req, res) => sendSuccess(res, await service.findAvailability(req.user._id, req.params.calendarId, req.query.from, req.query.to, req.query.durationMinutes)));
-export const getSettings = catchAsync(async (req, res) => sendSuccess(res, await service.getCalendarSettings(req.user._id, req.params.calendarId)));
+export const conflicts = catchAsync(async (req, res) => sendSuccess(res, await service.checkConflicts(req.user._id, req.params.calendarId, req.query.startsAt, req.query.endsAt, req.query.excludeEventId)));
+export const getSettings =catchAsync(async (req, res) => sendSuccess(res, await service.getCalendarSettings(req.user._id, req.params.calendarId)));
 export const updateSettings = catchAsync(async (req, res) => sendSuccess(res, await service.updateCalendarSettings(req.user._id, req.params.calendarId, req.body)));
 export const exception = catchAsync(async (req, res) => sendSuccess(res, await service.setRecurrenceException(req.user._id, req.params.eventId, req.body)));
 export const listShares = catchAsync(async (req, res) => sendSuccess(res, await service.listEventShares(req.user._id, req.params.eventId)));

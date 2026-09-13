@@ -1,5 +1,6 @@
 import catchAsync from '../utils/catchAsync.js';
 import { sendSuccess } from '../utils/response.js';
+import { requestLocale, translate } from '../utils/i18n.js';
 import * as userService from '../services/user.service.js';
 import { audit } from '../services/audit.service.js';
 
@@ -25,6 +26,6 @@ export const requestDeletion = catchAsync(async (req, res) => {
     recoverableUntil: deletion.deletion.purgeAt,
     managementUrl: deletion.managementUrl,
     billingManagedSeparately: true,
-    message: 'Deleting the account does not cancel an App Store or Play Store subscription.'
+    message: translate(requestLocale(req), 'Deleting the account does not cancel an App Store or Play Store subscription.')
   });
 });

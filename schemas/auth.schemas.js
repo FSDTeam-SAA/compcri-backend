@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LOCALES } from '../constants/enums.js';
 
 const email = z.string().trim().toLowerCase().email();
 const password = z.string().min(10).max(128);
@@ -10,7 +11,9 @@ export const registerSchema = z.object({
   timeZone: z.string().min(1).max(100).default('UTC'),
   termsVersion: z.string().min(1).max(30),
   privacyVersion: z.string().min(1).max(30).optional(),
-  termsAccepted: z.literal(true)
+  termsAccepted: z.literal(true),
+  // The language the app was showing, so the account starts in it.
+  locale: z.enum(LOCALES).optional()
 });
 export const loginSchema = z.object({ email, password: z.string().min(1).max(128) });
 export const googleSchema = z.object({
@@ -18,7 +21,8 @@ export const googleSchema = z.object({
   termsVersion: z.string().min(1).max(30).optional(),
   privacyVersion: z.string().min(1).max(30).optional(),
   termsAccepted: z.literal(true).optional(),
-  timeZone: z.string().min(1).max(100).default('UTC')
+  timeZone: z.string().min(1).max(100).default('UTC'),
+  locale: z.enum(LOCALES).optional()
 });
 export const refreshSchema = z.object({ refreshToken: z.string().min(20) });
 export const forgotSchema = z.object({ email });

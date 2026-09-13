@@ -16,6 +16,22 @@ const legal = [
   {
     type: 'PRIVACY', version: 'v1', locale: 'en', title: 'Privacy Policy',
     content: 'Placeholder privacy policy for development. Replace with legally approved Compcri privacy copy before production.', active: true
+  },
+  {
+    type: 'TERMS', version: 'v1', locale: 'pt', title: 'Termos e Condições',
+    content: 'Termos provisórios para desenvolvimento. Substitua pelos termos do Compcri aprovados juridicamente antes da produção.', active: true
+  },
+  {
+    type: 'PRIVACY', version: 'v1', locale: 'pt', title: 'Política de Privacidade',
+    content: 'Política de privacidade provisória para desenvolvimento. Substitua pelo texto de privacidade do Compcri aprovado juridicamente antes da produção.', active: true
+  },
+  {
+    type: 'TERMS', version: 'v1', locale: 'es', title: 'Términos y Condiciones',
+    content: 'Términos provisionales para desarrollo. Sustitúyelos por los términos de Compcri aprobados legalmente antes de producción.', active: true
+  },
+  {
+    type: 'PRIVACY', version: 'v1', locale: 'es', title: 'Política de Privacidad',
+    content: 'Política de privacidad provisional para desarrollo. Sustitúyela por el texto de privacidad de Compcri aprobado legalmente antes de producción.', active: true
   }
 ];
 

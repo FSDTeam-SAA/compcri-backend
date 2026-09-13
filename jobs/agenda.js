@@ -2,6 +2,7 @@ import { Agenda } from 'agenda';
 import { MongoBackend } from '@agendajs/mongo-backend';
 import { env } from '../config/env.js';
 import logger from '../config/logger.js';
+import { formatDateTime } from '../utils/i18n.js';
 import Event from '../models/Event.js';
 import MediaAsset from '../models/MediaAsset.js';
 import { RevenueCatEvent } from '../models/Subscription.js';
@@ -59,7 +60,9 @@ agenda.define('send-event-reminder', async (job) => {
     const responses = await EventResponse.find({ eventId, status: { $in: ['ACCEPTED', 'MAYBE'] } }).select('userId');
     const recipients = new Set([event.calendarId.ownerId.toString(), ...responses.map((response) => response.userId.toString())]);
     for (const recipientId of recipients) {
-      await createNotification(recipientId, 'REMINDER', event.title, `Event begins at ${new Date(occurrenceStartAt).toISOString()}`, { eventId });
+      await createNotification(recipientId, 'REMINDER', event.title, 'Starts {time}', { eventId }, {
+        time: (locale) => formatDateTime(locale, new Date(occurrenceStartAt), event.timeZone)
+      });
     }
   });
 });

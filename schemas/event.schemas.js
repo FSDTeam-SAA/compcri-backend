@@ -45,7 +45,9 @@ export const shareBody = z.object({
   permission: z.enum(['VIEW_ONLY', 'RESPOND', 'EDIT'])
 });
 export const rsvpBody = z.object({ status: z.enum(['ACCEPTED', 'DECLINED', 'MAYBE']) });
-export const availabilityQuery = z.object({ from: isoDate, to: isoDate, durationMinutes: z.coerce.number().int().min(5).max(1440).default(30) });
+export const conflictQuery = z.object({ startsAt: isoDate, endsAt: isoDate, excludeEventId: objectId.optional() })
+  .refine((query) => new Date(query.endsAt) > new Date(query.startsAt), { message: 'endsAt must be after startsAt', path: ['endsAt'] });
+export const availabilityQuery =z.object({ from: isoDate, to: isoDate, durationMinutes: z.coerce.number().int().min(5).max(1440).default(30) });
 
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const calendarSettingsBody = z.object({

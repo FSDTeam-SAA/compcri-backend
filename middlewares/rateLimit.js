@@ -1,4 +1,5 @@
 import { rateLimit } from 'express-rate-limit';
+import { requestLocale, translate } from '../utils/i18n.js';
 import RateLimit from '../models/RateLimit.js';
 
 class MongoRateLimitStore {
@@ -40,7 +41,7 @@ class MongoRateLimitStore {
 
 const handler = (req, res) => res.status(429).json({
   success: false,
-  error: { code: 'RATE_LIMITED', message: 'Too many requests', requestId: req.id }
+  error: { code: 'RATE_LIMITED', message: translate(requestLocale(req), 'Too many requests'), requestId: req.id }
 });
 
 export const apiLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 500, store: new MongoRateLimitStore('api'), handler });

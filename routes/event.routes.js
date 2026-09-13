@@ -10,6 +10,7 @@ router.use(['/calendars', '/events'], authenticate);
 router.get('/calendars/:calendarId/events', validate({ params: schemas.calendarParams, query: schemas.listEventsQuery }), controller.list);
 router.post('/calendars/:calendarId/events', validate({ params: schemas.calendarParams, body: schemas.eventBody }), controller.create);
 router.get('/calendars/:calendarId/availability', validate({ params: schemas.calendarParams, query: schemas.availabilityQuery }), controller.availability);
+router.get('/calendars/:calendarId/conflicts', validate({ params: schemas.calendarParams, query: schemas.conflictQuery }), controller.conflicts);
 router.get('/calendars/:calendarId/settings', validate({ params: schemas.calendarParams }), controller.getSettings);
 router.patch('/calendars/:calendarId/settings', validate({ params: schemas.calendarParams, body: schemas.calendarSettingsBody }), controller.updateSettings);
 router.get('/events/shared', validate({ query: schemas.sharedEventsQuery }), controller.shared);
