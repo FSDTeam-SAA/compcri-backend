@@ -879,3 +879,52 @@ describe('admin APIs', () => {
     expect(await models.AuditLog.exists({ action: 'ADMIN_USER_SUSPEND', targetId: member.body.data.user._id })).toBeTruthy();
   });
 });
+
+describe('single-occurrence edits (QA F07/F08)', () => {
+  it('addresses a moved occurrence by its original slot, leaving the series origin alone', async () => {
+    const owner = await register('occurrence@example.com').expect(201);
+    const token = owner.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+
+    const created = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({
+      title: 'Daily standup', startsAt: '2026-09-13T23:10:00.000Z', endsAt: '2026-09-13T23:30:00.000Z',
+      timeZone: 'UTC', reminderMinutes: [], recurrenceRrule: 'FREQ=DAILY;COUNT=3'
+    }).expect(201);
+    const eventId = created.body.data.event._id;
+
+    const range = `from=2026-09-13T00:00:00.000Z&to=2026-09-17T00:00:00.000Z`;
+    const list = async () => (await request(app).get(`/api/v1/calendars/${calendarId}/events?${range}`).set(auth(token)).expect(200)).body.data;
+
+    // Every row exposes the untouched slot it came from.
+    const before = await list();
+    expect(before.map((item) => item.occurrenceOriginalStartAt)).toEqual([
+      '2026-09-13T23:10:00.000Z', '2026-09-14T23:10:00.000Z', '2026-09-15T23:10:00.000Z'
+    ]);
+
+    // Move the second occurrence twenty minutes later.
+    await request(app).put(`/api/v1/events/${eventId}/recurrence-exception`).set(auth(token)).send({
+      originalStartAt: '2026-09-14T23:10:00.000Z', version: 0,
+      overrides: { startsAt: '2026-09-14T23:30:00.000Z', endsAt: '2026-09-14T23:50:00.000Z' }
+    }).expect(200);
+
+    const moved = (await list())[1];
+    expect(moved.occurrenceStartAt).toBe('2026-09-14T23:30:00.000Z');
+    // The moved time is no longer a recurrence slot, so only this still works.
+    expect(moved.occurrenceOriginalStartAt).toBe('2026-09-14T23:10:00.000Z');
+
+    // Sending the moved time back is exactly what the client used to do.
+    await request(app).put(`/api/v1/events/${eventId}/recurrence-exception`).set(auth(token)).send({
+      originalStartAt: moved.occurrenceStartAt, version: 1, cancelled: true
+    }).expect(422);
+
+    // Cancelling by the original slot removes that date and nothing else.
+    await request(app).put(`/api/v1/events/${eventId}/recurrence-exception`).set(auth(token)).send({
+      originalStartAt: moved.occurrenceOriginalStartAt, version: 1, cancelled: true
+    }).expect(200);
+
+    const after = await list();
+    expect(after.map((item) => item.occurrenceOriginalStartAt)).toEqual([
+      '2026-09-13T23:10:00.000Z', '2026-09-15T23:10:00.000Z'
+    ]);
+  });
+});

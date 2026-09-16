@@ -26,7 +26,9 @@ const durationMs = (event) => event.endsAt.getTime() - event.startsAt.getTime();
 export const expandEvent = (event, from, to) => {
   const raw = event.toObject ? event.toObject() : event;
   if (!raw.recurrenceRrule) {
-    if (raw.startsAt < to && raw.endsAt > from) return [{ ...raw, occurrenceStartAt: raw.startsAt, occurrenceEndAt: raw.endsAt }];
+    if (raw.startsAt < to && raw.endsAt > from) {
+      return [{ ...raw, occurrenceStartAt: raw.startsAt, occurrenceEndAt: raw.endsAt, occurrenceOriginalStartAt: raw.startsAt }];
+    }
     return [];
   }
   const starts = recurrenceBetween({
@@ -43,7 +45,12 @@ export const expandEvent = (event, from, to) => {
       ...raw,
       ...(exception?.overrides || {}),
       occurrenceStartAt: exception?.overrides?.startsAt ? new Date(exception.overrides.startsAt) : start,
-      occurrenceEndAt: exception?.overrides?.endsAt ? new Date(exception.overrides.endsAt) : new Date(start.getTime() + durationMs(raw))
+      occurrenceEndAt: exception?.overrides?.endsAt ? new Date(exception.overrides.endsAt) : new Date(start.getTime() + durationMs(raw)),
+      // The untouched slot this occurrence was generated from. Once an
+      // occurrence carries an override, occurrenceStartAt is the moved time,
+      // which setRecurrenceException would no longer recognise; clients must
+      // send this value back as originalStartAt to address the right date.
+      occurrenceOriginalStartAt: start
     };
     return occurrence.occurrenceStartAt < to && occurrence.occurrenceEndAt > from ? occurrence : null;
   }).filter(Boolean);
