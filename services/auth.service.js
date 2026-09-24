@@ -15,6 +15,7 @@ import ApiError from '../utils/ApiError.js';
 import { humanCode, randomOtp, randomUuid, secureEquals, sha256 } from '../utils/crypto.js';
 import { issueRefreshToken, revokeAllSessions, signAccessToken } from './token.service.js';
 import { sendMail } from './mailer.service.js';
+import { verifyAppleIdentityToken } from './appleIdentity.service.js';
 
 let googleClient = new OAuth2Client();
 export const setGoogleClientForTests = (mockClient) => { googleClient = mockClient; };
@@ -136,6 +137,49 @@ export const loginWithGoogle = async (input, context) => {
     }
   } else if (!user.googleSubject) {
     user.googleSubject = payload.sub;
+    await user.save();
+  }
+
+  if (user.status !== 'ACTIVE') throw new ApiError(StatusCodes.FORBIDDEN, 'Account is unavailable', 'ACCOUNT_UNAVAILABLE');
+  return authPayload(user, context);
+};
+
+export const loginWithApple = async (input, context) => {
+  const identity = await verifyAppleIdentityToken(input.identityToken);
+
+  // Apple hands out a private relay address when the user hides their email,
+  // so the subject — not the address — is what identifies the account.
+  let user = await User.findOne({
+    $or: [{ appleSubject: identity.subject }, ...(identity.email ? [{ email: identity.email }] : [])]
+  });
+  if (!user) {
+    if (!identity.email) throw new ApiError(StatusCodes.UNAUTHORIZED, 'Apple did not share an email address', 'APPLE_EMAIL_MISSING');
+    if (!input.termsAccepted || !input.termsVersion) throw new ApiError(422, 'Terms acceptance is required for a new account', 'TERMS_ACCEPTANCE_REQUIRED');
+    const terms = await LegalDocument.findOne({ type: 'TERMS', version: input.termsVersion, active: true });
+    if (!terms) throw new ApiError(422, 'Terms version is not active', 'INVALID_TERMS_VERSION');
+    const privacy = await LegalDocument.findOne({ type: 'PRIVACY', version: input.privacyVersion || input.termsVersion, active: true });
+    if (!privacy) throw new ApiError(422, 'Privacy version is not active', 'INVALID_PRIVACY_VERSION');
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        [user] = await User.create([{
+          email: identity.email,
+          appleSubject: identity.subject,
+          displayName: input.fullName,
+          ...(input.locale && { locale: input.locale }),
+          contactCode: await uniqueContactCode(input.fullName || 'USR'),
+          revenueCatAppUserId: randomUuid()
+        }], { session });
+        await Calendar.create([{ ownerId: user._id, name: `${(input.fullName || 'My').split(' ')[0]} Calendar`, timeZone: input.timeZone }], { session });
+        await Subscription.create([{ userId: user._id, appUserId: user.revenueCatAppUserId }], { session });
+        await LegalAcceptance.create([{ userId: user._id, documentId: terms._id, version: terms.version, ip: context.ip }], { session });
+        await LegalAcceptance.create([{ userId: user._id, documentId: privacy._id, version: privacy.version, ip: context.ip }], { session });
+      });
+    } finally {
+      await session.endSession();
+    }
+  } else if (!user.appleSubject) {
+    user.appleSubject = identity.subject;
     await user.save();
   }
 

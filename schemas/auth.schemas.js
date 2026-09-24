@@ -24,6 +24,17 @@ export const googleSchema = z.object({
   timeZone: z.string().min(1).max(100).default('UTC'),
   locale: z.enum(LOCALES).optional()
 });
+export const appleSchema = z.object({
+  identityToken: z.string().min(20),
+  // Apple sends the name only on the very first authorisation, so the device
+  // forwards it once; later sign-ins carry the subject alone.
+  fullName: z.string().min(1).max(100).optional(),
+  termsVersion: z.string().min(1).max(30).optional(),
+  privacyVersion: z.string().min(1).max(30).optional(),
+  termsAccepted: z.literal(true).optional(),
+  timeZone: z.string().min(1).max(100).default('UTC'),
+  locale: z.enum(LOCALES).optional()
+});
 export const refreshSchema = z.object({ refreshToken: z.string().min(20) });
 export const forgotSchema = z.object({ email });
 export const verifyOtpSchema = z.object({ email, code: z.string().regex(/^\d{6}$/) });

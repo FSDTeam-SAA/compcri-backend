@@ -26,6 +26,7 @@ const schema = z.object({
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),
   GOOGLE_CLIENT_IDS: z.string().default(''),
+  APPLE_CLIENT_IDS: z.string().default(''),
   AI_PROVIDER: z.enum(['gemini', 'openai']).default('openai'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
@@ -93,6 +94,7 @@ export const env = Object.freeze({
   ...parsed.data,
   CORS_ORIGINS: csv(parsed.data.CORS_ORIGINS),
   GOOGLE_CLIENT_IDS: csv(parsed.data.GOOGLE_CLIENT_IDS),
+  APPLE_CLIENT_IDS: csv(parsed.data.APPLE_CLIENT_IDS),
   REVENUECAT_MONTHLY_PRODUCT_IDS: csv(parsed.data.REVENUECAT_MONTHLY_PRODUCT_IDS),
   REVENUECAT_YEARLY_PRODUCT_IDS: csv(parsed.data.REVENUECAT_YEARLY_PRODUCT_IDS),
   FIREBASE_PRIVATE_KEY: parsed.data.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')

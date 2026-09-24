@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true, unique: true, index: true },
   passwordHash: { type: String, select: false },
   googleSubject: { type: String, sparse: true, unique: true, index: true },
+  appleSubject: { type: String, sparse: true, unique: true, index: true },
   role: { type: String, enum: USER_ROLES, default: 'USER', index: true },
   status: { type: String, enum: USER_STATUSES, default: 'ACTIVE', index: true },
   displayName: { type: String, trim: true, maxlength: 100 },

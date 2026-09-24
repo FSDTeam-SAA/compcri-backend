@@ -26,6 +26,7 @@ export const adminLogin = catchAsync(async (req, res) => {
 });
 
 export const googleLogin = catchAsync(async (req, res) => sendSuccess(res, await authService.loginWithGoogle(req.body, context(req))));
+export const appleLogin = catchAsync(async (req, res) => sendSuccess(res, await authService.loginWithApple(req.body, context(req))));
 export const refresh = catchAsync(async (req, res) => sendSuccess(res, await authService.rotateRefreshToken(req.body.refreshToken, context(req))));
 export const logout = catchAsync(async (req, res) => {
   await authService.logout(req.body.refreshToken);

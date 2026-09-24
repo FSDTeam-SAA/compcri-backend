@@ -9,6 +9,7 @@ router.use(authLimiter);
 router.post('/register', validate({ body: schemas.registerSchema }), controller.register);
 router.post('/login', validate({ body: schemas.loginSchema }), controller.login);
 router.post('/google', validate({ body: schemas.googleSchema }), controller.googleLogin);
+router.post('/apple', validate({ body: schemas.appleSchema }), controller.appleLogin);
 router.post('/refresh', validate({ body: schemas.refreshSchema }), controller.refresh);
 router.post('/logout', validate({ body: schemas.refreshSchema }), controller.logout);
 router.post('/forgot-password', validate({ body: schemas.forgotSchema }), controller.forgotPassword);
