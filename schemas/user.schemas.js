@@ -10,6 +10,7 @@ export const updateProfileSchema = z.object({
   city: z.string().trim().max(80).optional(),
   locale: z.enum(['en', 'pt', 'es']).optional(),
   interests: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
+  assistantName: z.string().trim().max(40).optional(),
   aiPersonalizationConsent: z.boolean().optional(),
   avatarMediaId: z.string().regex(/^[a-f\d]{24}$/i).nullable().optional()
 }).strict();

@@ -27,6 +27,10 @@ const userSchema = new mongoose.Schema({
   city: { type: String, trim: true, maxlength: 80 },
   locale: { type: String, enum: LOCALES, default: 'en' },
   interests: [{ type: String, trim: true, maxlength: 50 }],
+  // What this user calls the assistant. Empty means the app's own default,
+  // so an account that never chose one follows the app rather than freezing
+  // whatever name shipped the day it was created.
+  assistantName: { type: String, trim: true, maxlength: 40 },
   aiPersonalizationConsent: { type: Boolean, default: false },
   avatarMediaId: { type: mongoose.Schema.Types.ObjectId, ref: 'MediaAsset' },
   contactCode: { type: String, required: true, unique: true, index: true },
