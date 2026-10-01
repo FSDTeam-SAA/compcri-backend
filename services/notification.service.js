@@ -40,6 +40,8 @@ export const deliverPush = async (notification) => {
       payload: {
         aps: {
           sound: urgent ? 'default' : undefined,
+          // 'time-sensitive' breaks through a Focus; it needs the matching
+          // capability on the App ID, which the shipped profile carries.
           'interruption-level': urgent ? 'time-sensitive' : 'active'
         }
       }
