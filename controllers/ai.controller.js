@@ -100,6 +100,16 @@ export const sendVoiceMessage = catchAsync(async (req, res) => sendSuccess(
 ));
 export const editMessage = catchAsync(async (req, res) => sendSuccess(res, await service.editMessage(req.user._id, req.params.id, req.params.messageId, req.body.content)));
 export const deleteMessage = catchAsync(async (req, res) => { await service.deleteMessage(req.user._id, req.params.id, req.params.messageId); sendSuccess(res, { deleted: true }); });
+export const voicePreview = catchAsync(async (req, res) => {
+  const speech = await service.voicePreview(req.user._id, req.params.voice);
+  sendSuccess(res, {
+    encoding: 'base64',
+    base64: speech.buffer.toString('base64'),
+    contentType: speech.contentType,
+    format: speech.format,
+    voice: speech.voice
+  });
+});
 export const quota = catchAsync(async (req, res) => sendSuccess(res, await service.quotaStatus(req.user._id, req.query.calendarId)));
 export const confirmAction = catchAsync(async (req, res) => sendSuccess(res, await service.confirmAction(req.user._id, req.params.id, req.body.overrideConflicts, req.body)));
 export const rejectAction = catchAsync(async (req, res) => sendSuccess(res, await service.rejectAction(req.user._id, req.params.id)));

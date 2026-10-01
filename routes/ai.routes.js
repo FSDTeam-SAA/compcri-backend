@@ -10,6 +10,7 @@ const objectId = z.string().regex(/^[a-f\d]{24}$/i);
 const router = Router();
 router.use(authenticate);
 router.get('/quota', validate({ query: z.object({ calendarId: objectId }) }), controller.quota);
+router.get('/voices/:voice/preview', validate({ params: z.object({ voice: z.string().trim().min(1).max(40) }) }), controller.voicePreview);
 router.get('/conversations', validate({ query: z.object({ search: z.string().trim().max(100).optional() }) }), controller.listConversations);
 router.post('/conversations', validate({ body: schemas.conversationBody }), controller.createConversation);
 router.get('/conversations/:id', validate({ params: schemas.conversationParams }), controller.getConversation);

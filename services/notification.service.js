@@ -20,10 +20,30 @@ export const deliverPush = async (notification) => {
   if (key && user.notificationPreferences[key] === false) return;
   const devices = await Device.find({ userId: notification.userId });
   if (!devices.length) return;
+  // A reminder someone asked to be alarmed by rings on its own channel and
+  // interrupts a Focus; everything else arrives the quiet way.
+  const urgent = notification.category === 'REMINDER'
+    && user.notificationPreferences.alarmReminders === true;
   const response = await sendMulticast({
     tokens: devices.map((item) => item.token),
     notification: { title: notification.title, body: notification.body },
-    data: Object.fromEntries(Object.entries(notification.data || {}).map(([k, v]) => [k, String(v)]))
+    data: Object.fromEntries(Object.entries(notification.data || {}).map(([k, v]) => [k, String(v)])),
+    android: {
+      priority: urgent ? 'high' : 'normal',
+      notification: {
+        channelId: urgent ? 'aurox_alarms' : 'aurox_reminders',
+        ...(urgent && { sound: 'default', defaultVibrateTimings: true })
+      }
+    },
+    apns: {
+      headers: { 'apns-priority': '10' },
+      payload: {
+        aps: {
+          sound: urgent ? 'default' : undefined,
+          'interruption-level': urgent ? 'time-sensitive' : 'active'
+        }
+      }
+    }
   });
   if (!response) return;
   const invalidTokens = response.responses

@@ -5,6 +5,9 @@ import { env } from '../config/env.js';
 const notificationPreferencesSchema = new mongoose.Schema({
   pushEnabled: { type: Boolean, default: true },
   reminders: { type: Boolean, default: true },
+  // Reminders that ring like an alarm and break through Do Not Disturb.
+  // Off by default: an interruption nobody asked for is a reason to uninstall.
+  alarmReminders: { type: Boolean, default: false },
   invitations: { type: Boolean, default: true },
   groupUpdates: { type: Boolean, default: true },
   contactRequests: { type: Boolean, default: true },

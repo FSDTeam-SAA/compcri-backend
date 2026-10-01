@@ -23,6 +23,7 @@ export const changePasswordSchema = z.object({
 export const notificationPreferencesSchema = z.object({
   pushEnabled: z.boolean().optional(),
   reminders: z.boolean().optional(),
+  alarmReminders: z.boolean().optional(),
   invitations: z.boolean().optional(),
   groupUpdates: z.boolean().optional(),
   contactRequests: z.boolean().optional(),

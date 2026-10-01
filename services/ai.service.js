@@ -11,6 +11,7 @@ import { hasPremiumAccess } from '../utils/premium.js';
 import { assertCalendarCreate, getCalendarAccess, getEventAccess } from './calendarAccess.service.js';
 import * as eventService from './event.service.js';
 import * as noteService from './note.service.js';
+import { OPENAI_TTS_VOICES } from '../constants/enums.js';
 import { aiToolDefinitions, aiToolSchemas } from './ai/tools.js';
 import {
   createAiProviderSession,
@@ -394,6 +395,35 @@ export const createConversation = async (userId, calendarId, title) => {
   const access = await getCalendarAccess(userId, calendarId);
   await ensurePremium(access.calendar);
   return Conversation.create({ userId, calendarId, title: title || 'New chat' });
+};
+
+/// One short line per voice so the picker can be listened to before choosing.
+///
+/// Synthesised once and then held, because the sentence never changes: a
+/// preview that re-billed every tap would cost more than the feature is
+/// worth, which is exactly what the client asked us to avoid.
+const previewCache = new Map();
+const PREVIEW_LINES = {
+  en: (name) => `Hi, I'm ${name}. How can I help you?`,
+  pt: (name) => `Oi, sou ${name}. Como posso ajudar?`,
+  es: (name) => `Hola, soy ${name}. ¿Cómo puedo ayudarte?`
+};
+
+export const voicePreview = async (userId, voice) => {
+  if (!OPENAI_TTS_VOICES.includes(voice)) {
+    throw new ApiError(400, 'Unknown voice', 'UNKNOWN_VOICE');
+  }
+  const user = await User.findById(userId).select('locale assistantName');
+  const locale = PREVIEW_LINES[user?.locale] ? user.locale : 'en';
+  const name = user?.assistantName?.trim() || env.APP_NAME;
+  const key = `${voice}:${locale}:${name}`;
+  const cached = previewCache.get(key);
+  if (cached) return cached;
+  const speech = await synthesizeSpeech(PREVIEW_LINES[locale](name), voice);
+  // Bounded so a flood of custom names cannot grow this without end.
+  if (previewCache.size > 200) previewCache.clear();
+  previewCache.set(key, speech);
+  return speech;
 };
 
 export const listConversations = (userId, search) => Conversation.find({
