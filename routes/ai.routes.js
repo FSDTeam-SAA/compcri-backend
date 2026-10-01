@@ -14,6 +14,7 @@ router.get('/conversations', validate({ query: z.object({ search: z.string().tri
 router.post('/conversations', validate({ body: schemas.conversationBody }), controller.createConversation);
 router.get('/conversations/:id', validate({ params: schemas.conversationParams }), controller.getConversation);
 router.delete('/conversations/:id', validate({ params: schemas.conversationParams }), controller.deleteConversation);
+router.patch('/conversations/:id/saved', validate({ params: schemas.conversationParams, body: z.object({ saved: z.boolean() }) }), controller.setConversationSaved);
 router.post('/conversations/:id/messages', validate({ params: schemas.conversationParams, body: schemas.messageBody }), controller.sendMessage);
 router.post('/conversations/:id/messages/stream', validate({ params: schemas.conversationParams, body: schemas.messageBody }), controller.streamMessage);
 router.post(

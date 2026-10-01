@@ -41,6 +41,10 @@ const schema = z.object({
   OPENAI_VOICE_MAX_FILE_MB: z.coerce.number().int().min(1).max(25).default(10),
   AI_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
   AI_DAILY_QUOTA: z.coerce.number().int().positive().default(50),
+  // How long a conversation survives untouched. Paid accounts get longer and
+  // can mark one to keep indefinitely; free accounts cannot.
+  CHAT_RETENTION_DAYS_FREE: z.coerce.number().int().positive().default(7),
+  CHAT_RETENTION_DAYS_PREMIUM: z.coerce.number().int().positive().default(30),
   PAYWALL_ENABLED: enabledByDefaultBooleanString,
   REVENUECAT_SECRET_API_KEY: z.string().optional(),
   REVENUECAT_WEBHOOK_AUTH: z.string().optional(),

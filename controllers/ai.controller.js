@@ -7,6 +7,7 @@ export const createConversation = catchAsync(async (req, res) => sendSuccess(res
 export const listConversations = catchAsync(async (req, res) => sendSuccess(res, await service.listConversations(req.user._id, req.query.search)));
 export const getConversation = catchAsync(async (req, res) => sendSuccess(res, await service.getConversation(req.user._id, req.params.id)));
 export const deleteConversation = catchAsync(async (req, res) => { await service.deleteConversation(req.user._id, req.params.id); sendSuccess(res, { deleted: true }); });
+export const setConversationSaved = catchAsync(async (req, res) => sendSuccess(res, await service.setConversationSaved(req.user._id, req.params.id, req.body.saved)));
 export const sendMessage = catchAsync(async (req, res) => sendSuccess(res, await service.sendMessage(req.user._id, req.params.id, req.body.content)));
 
 const SSE_HEARTBEAT_MS = 15000;

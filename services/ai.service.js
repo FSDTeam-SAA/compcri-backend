@@ -400,11 +400,27 @@ export const listConversations = (userId, search) => Conversation.find({
   userId,
   deletedAt: null,
   ...(search && { title: { $regex: escapeRegex(search), $options: 'i' } })
-}).select('-messages').sort({ updatedAt: -1 });
+}).select('-messages').sort({ savedAt: -1, updatedAt: -1 });
 
 export const getConversation = async (userId, id) => {
   const conversation = await Conversation.findOne({ _id: id, userId, deletedAt: null });
   if (!conversation) throw new ApiError(404, 'Conversation not found', 'CONVERSATION_NOT_FOUND');
+  return conversation;
+};
+
+/// Marks a conversation to outlive the retention sweep, or lets it rejoin it.
+///
+/// Keeping history for ever is what the paid plan buys, so a free account is
+/// told plainly rather than silently ignored.
+export const setConversationSaved = async (userId, id, saved) => {
+  const user = await User.findById(userId).select('plan premiumUntil role');
+  if (!user) throw new ApiError(404, 'User not found', 'USER_NOT_FOUND');
+  if (saved && env.PAYWALL_ENABLED && !hasPremiumAccess(user)) {
+    throw new ApiError(402, 'Saving conversations is a Premium feature', 'PREMIUM_REQUIRED');
+  }
+  const conversation = await getConversation(userId, id);
+  conversation.savedAt = saved ? new Date() : null;
+  await conversation.save();
   return conversation;
 };
 

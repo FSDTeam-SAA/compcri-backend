@@ -7,7 +7,9 @@ import Event from '../models/Event.js';
 import MediaAsset from '../models/MediaAsset.js';
 import { RevenueCatEvent } from '../models/Subscription.js';
 import { Subscription } from '../models/Subscription.js';
-import { PendingAiAction } from '../models/Ai.js';
+import { Conversation, PendingAiAction } from '../models/Ai.js';
+import User from '../models/User.js';
+import { effectivePlan } from '../utils/premium.js';
 import { AccountDeletion } from '../models/Operations.js';
 import { createNotification, deliverPush } from '../services/notification.service.js';
 import Notification from '../models/Notification.js';
@@ -108,6 +110,30 @@ agenda.define('expire-ai-actions', async () => {
   await PendingAiAction.updateMany({ status: 'PENDING', expiresAt: { $lte: new Date() } }, { $set: { status: 'EXPIRED' } });
 });
 
+/// Ages out chat history so the server does not carry every conversation for
+/// ever. Paid accounts get the longer window and may mark a conversation to
+/// keep; a saved one is never swept.
+agenda.define('expire-conversations', async () => {
+  const now = Date.now();
+  const cutoffs = {
+    FREE: new Date(now - env.CHAT_RETENTION_DAYS_FREE * 24 * 60 * 60 * 1000),
+    PREMIUM: new Date(now - env.CHAT_RETENTION_DAYS_PREMIUM * 24 * 60 * 60 * 1000)
+  };
+  // The free window is the shorter one, so its cutoff is the later date and
+  // the wider net: anything a paid account should lose is already inside it.
+  const stale = await Conversation
+    .find({ deletedAt: null, savedAt: null, updatedAt: { $lte: cutoffs.FREE } })
+    .select('userId updatedAt')
+    .limit(500);
+  if (!stale.length) return;
+  const owners = await User.find({ _id: { $in: stale.map((item) => item.userId) } }).select('plan premiumUntil role');
+  const planById = new Map(owners.map((user) => [user._id.toString(), effectivePlan(user)]));
+  const due = stale
+    .filter((item) => item.updatedAt <= cutoffs[planById.get(item.userId.toString()) === 'PREMIUM' ? 'PREMIUM' : 'FREE'])
+    .map((item) => item._id);
+  if (due.length) await Conversation.updateMany({ _id: { $in: due } }, { $set: { deletedAt: new Date() } });
+});
+
 export const enqueueJob = (name, data, when = 'now') => env.DISABLE_JOBS ? Promise.resolve(null) : agenda.schedule(when, name, data);
 
 export const startAgenda = async () => {
@@ -115,6 +141,7 @@ export const startAgenda = async () => {
   await agenda.start();
   await agenda.every('1 hour', 'cleanup-orphaned-media', {}, { skipImmediate: true });
   await agenda.every('10 minutes', 'expire-ai-actions');
+  await agenda.every('6 hours', 'expire-conversations', {}, { skipImmediate: true });
   await agenda.every('6 hours', 'reconcile-all-revenuecat', {}, { skipImmediate: true });
   await agenda.every('1 hour', 'purge-due-accounts', {}, { skipImmediate: true });
   await agenda.every('1 day', 'refresh-event-reminders', {}, { skipImmediate: true });
