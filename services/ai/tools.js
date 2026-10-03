@@ -66,7 +66,7 @@ export const aiToolDefinitions = [
         startsAt: { type: 'string', description: 'Calendar-local time such as 2026-10-02T09:00, or ISO 8601 with an offset.' },
         endsAt: { type: 'string' },
         timeZone: { type: 'string' },
-        reminderMinutes: { type: 'array', items: { type: 'integer' } },
+        reminderMinutes: { type: 'array', items: { type: 'integer' }, description: 'Notify at event start by default ([0]). Positive minutes add advance reminders (e.g. [0, 10] means at start and 10 minutes before). Use [] only if the user explicitly turns off all reminders. Omit on update to preserve reminders.' },
         recurrenceRrule: { type: 'string' },
         savePastEvent: { type: 'boolean', description: 'Only after the user chose to save a time that has already passed as a past event. It is saved without reminders.' }
       },
@@ -88,7 +88,7 @@ export const aiToolDefinitions = [
         startsAt: { type: 'string', description: 'Calendar-local time such as 2026-10-02T09:00, or ISO 8601 with an offset.' },
         endsAt: { type: 'string' },
         timeZone: { type: 'string' },
-        reminderMinutes: { type: 'array', items: { type: 'integer' } },
+        reminderMinutes: { type: 'array', items: { type: 'integer' }, description: 'Notify at event start by default ([0]). Positive minutes add advance reminders (e.g. [0, 10] means at start and 10 minutes before). Use [] only if the user explicitly turns off all reminders. Omit on update to preserve reminders.' },
         savePastEvent: { type: 'boolean', description: 'Only after the user chose to save a time that has already passed as a past event. It is saved without reminders.' }
       },
       required: ['eventId', 'version']
@@ -173,7 +173,7 @@ export const aiToolSchemas = {
     startsAt: iso,
     endsAt: iso,
     timeZone: timezone,
-    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).optional(),
+    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(11).optional(),
     recurrenceRrule: z.string().max(2000).optional(),
     savePastEvent: z.boolean().optional()
   }),
@@ -186,7 +186,7 @@ export const aiToolSchemas = {
     startsAt: iso.optional(),
     endsAt: iso.optional(),
     timeZone: timezone.optional(),
-    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).optional(),
+    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(11).optional(),
     savePastEvent: z.boolean().optional()
   }),
   propose_delete_event: z.object({

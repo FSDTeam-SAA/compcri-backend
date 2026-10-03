@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { withEventTimeReminder } from '../utils/reminders.js';
 import { env } from '../config/env.js';
 import logger from '../config/logger.js';
 import User from '../models/User.js';
@@ -347,7 +348,9 @@ const runTool = async (conversation, userId, calendar, call, hour12) => {
   if (call.name === 'propose_create_event' || call.name === 'propose_update_event') {
     const { savePastEvent, ...rest } = args;
     args = rest;
-    if (call.name === 'propose_create_event') args.reminderMinutes ??= [10];
+    if (call.name === 'propose_create_event' || args.reminderMinutes !== undefined) {
+      args.reminderMinutes = withEventTimeReminder(args.reminderMinutes);
+    }
     // A start that has already passed is almost always the wrong day picked
     // by mistake (today instead of tomorrow). Stop and ask, the same as the
     // app does, instead of staging a missed appointment. A repeating series
@@ -885,7 +888,7 @@ export const confirmAction = async (userId, actionId, overrideConflicts, { start
       result = await eventService.createEvent(userId, action.calendarId, {
         ...action.payload,
         ...retimed,
-        reminderMinutes: action.payload.reminderMinutes ?? [10],
+        reminderMinutes: action.payload.reminderMinutes ?? [0],
         overrideConflicts
       });
     } else if (action.type === 'UPDATE_EVENT') {

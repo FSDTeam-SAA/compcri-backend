@@ -1142,26 +1142,26 @@ describe('assistant availability answers (free/busy decided by the server)', () 
 
 
 describe('reminders in manual and AI event flows', () => {
-  const prepare = async (email) => {
+  const prepare = async (email, minutesAway) => {
     const registered = await register(email).expect(201);
     const token = registered.body.data.accessToken;
     const me = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data;
     await models.User.updateOne({ _id: me.user._id }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
-    const start = new Date(Date.now() + 30 * 60000);
+    const start = new Date(Date.now() + minutesAway * 60000);
     return { token, calendarId: me.primaryCalendar._id, input: {
       title: 'Reminder test', startsAt: start.toISOString(),
       endsAt: new Date(start.getTime() + 30 * 60000).toISOString(), timeZone: 'UTC'
     } };
   };
 
-  it.each([undefined, [5], []])('manual creation schedules the default, five-minute reminder, or explicit opt-out: %j', async (reminderMinutes) => {
-    const { token, calendarId, input } = await prepare('manual-reminder@example.com');
+  it.each([undefined, [10], []].flatMap((reminderMinutes) => [2, 30].map((minutesAway) => ({ reminderMinutes, minutesAway }))))('manual creation schedules the event-time default, optional advance reminder, or explicit opt-out: %j', async ({ reminderMinutes, minutesAway }) => {
+    const { token, calendarId, input } = await prepare('manual-reminder@example.com', minutesAway);
     const jobs = await import('../jobs/agenda.js');
     const enqueue = vi.spyOn(jobs, 'enqueueJob').mockResolvedValue(null);
     try {
       const created = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token))
         .send({ ...input, ...(reminderMinutes !== undefined && { reminderMinutes }) }).expect(201);
-      const expected = reminderMinutes ?? [10];
+      const expected = reminderMinutes === undefined ? [0] : reminderMinutes.length ? [0, ...reminderMinutes] : [];
       expect(created.body.data.event.reminderMinutes).toEqual(expected);
       if (expected.length) {
         expect(enqueue).toHaveBeenCalledWith('send-event-reminder', expect.objectContaining({
@@ -1172,11 +1172,12 @@ describe('reminders in manual and AI event flows', () => {
       await request(app).patch(`/api/v1/events/${event._id}`).set(auth(token))
         .send({ title: 'Renamed reminder test', version: event.__v }).expect(200);
       expect((await models.Event.findById(event._id)).reminderMinutes).toEqual(expected);
+      expect(enqueue).toHaveBeenCalledTimes(2 * expected.filter((minutes) => minutes < minutesAway).length);
     } finally { enqueue.mockRestore(); }
   });
 
-  it.each([undefined, [5], []])('AI confirmation schedules the same default, five-minute reminder, or opt-out: %j', async (reminderMinutes) => {
-    const { token, calendarId, input } = await prepare('ai-reminder@example.com');
+  it.each([undefined, [10], []].flatMap((reminderMinutes) => [2, 30].map((minutesAway) => ({ reminderMinutes, minutesAway }))))('AI confirmation schedules the event-time default, optional advance reminder, or opt-out: %j', async ({ reminderMinutes, minutesAway }) => {
+    const { token, calendarId, input } = await prepare('ai-reminder@example.com', minutesAway);
     const ai = await import('../services/ai.service.js');
     const replies = [
       { functionCalls: [{ id: 'reminder', name: 'propose_create_event', args: { ...input, ...(reminderMinutes !== undefined && { reminderMinutes }) } }], usageMetadata: {} },
@@ -1187,17 +1188,19 @@ describe('reminders in manual and AI event flows', () => {
     const reply = await request(app).post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages`).set(auth(token))
       .send({ content: 'Create an event with a reminder' }).expect(200);
     const pending = reply.body.data.pendingActions[0];
-    expect(pending.payload.reminderMinutes).toEqual(reminderMinutes ?? [10]);
+    const expected = reminderMinutes === undefined ? [0] : reminderMinutes.length ? [0, ...reminderMinutes] : [];
+    expect(pending.payload.reminderMinutes).toEqual(expected);
     const jobs = await import('../jobs/agenda.js');
     const enqueue = vi.spyOn(jobs, 'enqueueJob').mockResolvedValue(null);
     try {
       await request(app).post(`/api/v1/ai/actions/${pending._id}/confirm`).set(auth(token)).send({}).expect(200);
       const saved = await models.Event.findOne({ title: input.title });
-      expect(saved.reminderMinutes).toEqual(reminderMinutes ?? [10]);
-      if (reminderMinutes?.length === 0) expect(enqueue).not.toHaveBeenCalled();
-      else expect(enqueue).toHaveBeenCalledWith('send-event-reminder', expect.objectContaining({
-        eventId: saved._id.toString(), minutes: (reminderMinutes ?? [10])[0]
-      }), expect.any(Date));
+      expect(saved.reminderMinutes).toEqual(expected);
+      expect(enqueue).toHaveBeenCalledTimes(expected.filter((minutes) => minutes < minutesAway).length);
+      if (!expected.length) expect(enqueue).not.toHaveBeenCalled();
+      for (const minutes of expected.filter((minutes) => minutes < minutesAway)) expect(enqueue).toHaveBeenCalledWith('send-event-reminder', expect.objectContaining({
+        eventId: saved._id.toString(), minutes
+      }), new Date(new Date(input.startsAt).getTime() - minutes * 60000));
     } finally { enqueue.mockRestore(); }
   });
 });

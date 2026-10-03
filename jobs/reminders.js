@@ -1,5 +1,6 @@
 import { agenda, enqueueJob } from './agenda.js';
 import { recurrenceBetween } from '../utils/recurrence.js';
+import { withEventTimeReminder } from '../utils/reminders.js';
 
 export const scheduleEventReminders = async (event) => {
   await agenda.cancel({ name: 'send-event-reminder', 'data.eventId': event._id.toString() });
@@ -15,9 +16,11 @@ export const scheduleEventReminders = async (event) => {
     return exception?.overrides?.startsAt ? new Date(exception.overrides.startsAt) : originalStartAt;
   }).filter((occurrence) => occurrence && occurrence > now && occurrence <= horizon);
   for (const occurrence of occurrences) {
-    for (const minutes of new Set(event.reminderMinutes)) {
+    for (const minutes of withEventTimeReminder(event.reminderMinutes)) {
       const at = new Date(occurrence.getTime() - minutes * 60_000);
-      if (at > now) await enqueueJob('send-event-reminder', { eventId: event._id.toString(), occurrenceStartAt: occurrence.toISOString(), minutes }, at);
+      if (at >= now) {
+        await enqueueJob('send-event-reminder', { eventId: event._id.toString(), occurrenceStartAt: occurrence.toISOString(), minutes }, at);
+      }
     }
   }
 };

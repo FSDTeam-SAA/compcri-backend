@@ -340,7 +340,7 @@ export const createEvent = async (userId, calendarId, input) => {
     throw new ApiError(StatusCodes.CONFLICT, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(access.calendar, calendarId, startsAt, endsAt, conflicts));
   }
   const { overrideConflicts, ...data } = input;
-  const event = await Event.create({ ...data, reminderMinutes: data.reminderMinutes ?? [10], startsAt, endsAt, calendarId, createdById: userId, audit: [{ actorId: userId, action: 'CREATED' }] });
+  const event = await Event.create({ ...data, reminderMinutes: data.reminderMinutes ?? [0], startsAt, endsAt, calendarId, createdById: userId, audit: [{ actorId: userId, action: 'CREATED' }] });
   if (input.posterMediaId) {
     try {
       await claimMedia({ mediaId: input.posterMediaId, ownerId: userId, purpose: 'EVENT_POSTER', claimedByType: 'EVENT', claimedById: event._id });

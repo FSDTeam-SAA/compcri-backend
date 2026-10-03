@@ -28,7 +28,7 @@ const eventShape = z.object({
   startsAt: isoDate,
   endsAt: isoDate,
   timeZone: timezone,
-  reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).default([10]),
+  reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(11).default([0]),
   recurrenceRrule: z.string().trim().max(2000).nullable().optional(),
   groupId: objectId.nullable().optional(),
   overrideConflicts: z.boolean().default(false)

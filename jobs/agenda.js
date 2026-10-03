@@ -96,9 +96,15 @@ agenda.define('purge-due-accounts', async () => {
 });
 
 agenda.define('refresh-event-reminders', async () => {
-  const events = await Event.find({ status: 'ACTIVE', reminderMinutes: { $exists: true, $ne: [] }, recurrenceRrule: { $exists: true, $nin: [null, ''] } }).limit(1000);
+  const events = Event.find({
+    status: 'ACTIVE', reminderMinutes: { $exists: true, $ne: [] },
+    $or: [
+      { startsAt: { $gt: new Date() } },
+      { recurrenceRrule: { $exists: true, $nin: [null, ''] } }
+    ]
+  }).cursor();
   const { scheduleEventReminders } = await import('./reminders.js');
-  for (const event of events) await scheduleEventReminders(event);
+  for await (const event of events) await scheduleEventReminders(event);
 });
 
 agenda.define('cleanup-orphaned-media', async () => {
@@ -146,6 +152,9 @@ export const startAgenda = async () => {
   await agenda.every('6 hours', 'reconcile-all-revenuecat', {}, { skipImmediate: true });
   await agenda.every('1 hour', 'purge-due-accounts', {}, { skipImmediate: true });
   await agenda.every('1 day', 'refresh-event-reminders', {}, { skipImmediate: true });
+  // Refresh existing future events after a worker restart as well, so changes
+  // to reminder behavior reach events created before this release.
+  await enqueueJob('refresh-event-reminders', {});
   logger.info('Agenda worker started');
 };
 

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { withEventTimeReminder } from '../utils/reminders.js';
 
 const recurrenceExceptionSchema = new mongoose.Schema({
   originalStartAt: { type: Date, required: true },
@@ -16,7 +17,11 @@ const eventSchema = new mongoose.Schema({
   startsAt: { type: Date, required: true, index: true },
   endsAt: { type: Date, required: true, index: true },
   timeZone: { type: String, required: true, default: 'UTC' },
-  reminderMinutes: [{ type: Number, min: 0, max: 525600 }],
+  reminderMinutes: {
+    type: [{ type: Number, min: 0, max: 525600 }],
+    default: () => [0],
+    set: withEventTimeReminder
+  },
   recurrenceRrule: { type: String, maxlength: 2000 },
   recurrenceExceptions: [recurrenceExceptionSchema],
   status: { type: String, enum: ['ACTIVE', 'CANCELLED'], default: 'ACTIVE', index: true },
@@ -33,4 +38,3 @@ const eventSchema = new mongoose.Schema({
 eventSchema.index({ calendarId: 1, status: 1, startsAt: 1, endsAt: 1 });
 eventSchema.index({ groupId: 1, status: 1, startsAt: 1 });
 export default mongoose.model('Event', eventSchema);
-
