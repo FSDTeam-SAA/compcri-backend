@@ -363,12 +363,24 @@ export const requestLocale = (req) => {
 };
 
 /// A date and time the way people in [locale] write it, in [timeZone].
-export const formatDateTime = (locale, date, timeZone = 'UTC') => {
-  const options = { dateStyle: 'medium', timeStyle: 'short' };
+/// [hour12] forces 3:00 PM (true) or 15:00 (false); left out, the language
+/// decides.
+export const formatDateTime = (locale, date, timeZone = 'UTC', hour12) => {
+  const tag = dateLocales[locale] || 'en-US';
+  const render = (zone) => {
+    if (typeof hour12 !== 'boolean') {
+      return new Intl.DateTimeFormat(tag, { dateStyle: 'medium', timeStyle: 'short', timeZone: zone }).format(date);
+    }
+    // timeStyle cannot be combined with hourCycle without zero-padding the
+    // hour in some languages ("03:00 PM"), so the time is written on its own.
+    const day = new Intl.DateTimeFormat(tag, { dateStyle: 'medium', timeZone: zone }).format(date);
+    const time = new Intl.DateTimeFormat(tag, { hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hourCycle: hour12 ? 'h12' : 'h23', timeZone: zone }).format(date);
+    return `${day}, ${time}`;
+  };
   try {
-    return new Intl.DateTimeFormat(dateLocales[locale] || 'en-US', { ...options, timeZone }).format(date);
+    return render(timeZone);
   } catch {
-    return new Intl.DateTimeFormat(dateLocales[locale] || 'en-US', { ...options, timeZone: 'UTC' }).format(date);
+    return render('UTC');
   }
 };
 

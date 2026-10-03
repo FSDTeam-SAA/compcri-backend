@@ -2,6 +2,8 @@ export const USER_ROLES = ['USER', 'ADMIN'];
 export const USER_STATUSES = ['ACTIVE', 'SUSPENDED', 'PENDING_DELETION', 'DELETED'];
 export const PLANS = ['FREE', 'PREMIUM'];
 export const LOCALES = ['en', 'pt', 'es'];
+// How clock times are written: follow the phone, or force 3:00 PM / 15:00.
+export const TIME_FORMATS = ['AUTO', 'H12', 'H24'];
 
 export const DELEGATION_PRESETS = [
   'ADD_ONLY',

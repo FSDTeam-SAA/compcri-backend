@@ -3,6 +3,7 @@ import { MongoBackend } from '@agendajs/mongo-backend';
 import { env } from '../config/env.js';
 import logger from '../config/logger.js';
 import { formatDateTime } from '../utils/i18n.js';
+import { uses24Hour } from '../utils/timeFormat.js';
 import Event from '../models/Event.js';
 import MediaAsset from '../models/MediaAsset.js';
 import { RevenueCatEvent } from '../models/Subscription.js';
@@ -41,7 +42,7 @@ const withRetry = async (job, task, maxRetries = 5) => {
     const retryCount = Number(job.attrs.data.retryCount || 0);
     if (retryCount >= maxRetries) throw error;
     const delay = Math.min(60 * 60_000, 15_000 * (2 ** retryCount));
-    await enqueueJob(job.attrs.name, { ...job.attrs.data, retryCount: retryCount + 1 }, new Date(Date.now() + delay));
+    await enqueueJob(job.attrs.name, { ...job.attrs.data, ...(error.retryTokens && { retryTokens: error.retryTokens }), retryCount: retryCount + 1 }, new Date(Date.now() + delay));
     logger.warn({ err: error, job: job.attrs.name, retryCount: retryCount + 1 }, 'Agenda job scheduled for retry');
     return undefined;
   }
@@ -50,7 +51,7 @@ const withRetry = async (job, task, maxRetries = 5) => {
 agenda.define('deliver-notification', async (job) => {
   await withRetry(job, async () => {
     const notification = await Notification.findById(job.attrs.data.notificationId);
-    if (notification && !notification.deletedAt) await deliverPush(notification);
+    if (notification && !notification.deletedAt) await deliverPush(notification, job.attrs.data.retryTokens);
   });
 });
 
@@ -63,7 +64,7 @@ agenda.define('send-event-reminder', async (job) => {
     const recipients = new Set([event.calendarId.ownerId.toString(), ...responses.map((response) => response.userId.toString())]);
     for (const recipientId of recipients) {
       await createNotification(recipientId, 'REMINDER', event.title, 'Starts {time}', { eventId }, {
-        time: (locale) => formatDateTime(locale, new Date(occurrenceStartAt), event.timeZone)
+        time: (locale, recipient) => formatDateTime(locale, new Date(occurrenceStartAt), event.timeZone, !uses24Hour(recipient))
       });
     }
   });

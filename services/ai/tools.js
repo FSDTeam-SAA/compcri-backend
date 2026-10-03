@@ -3,27 +3,41 @@ import { z } from 'zod';
 export const aiToolDefinitions = [
   {
     name: 'list_events',
-    description: 'List calendar events in an exact ISO date range.',
+    description: 'List calendar events in a date range. Times in the result are already in the calendar timezone. Use it to find or describe events, not to decide whether a time is free: use check_availability for that.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        from: { type: 'string', format: 'date-time' },
-        to: { type: 'string', format: 'date-time' },
+        from: { type: 'string', description: 'Calendar-local time such as 2026-10-02T00:00, or ISO 8601 with an offset.' },
+        to: { type: 'string' },
         search: { type: 'string' }
       },
       required: ['from', 'to']
     }
   },
   {
-    name: 'find_availability',
-    description: 'Find free calendar slots within an exact ISO date range.',
+    name: 'check_availability',
+    description: 'Decide whether the user is free at one specific time. Call it whenever they ask if they are free or available, whether something fits, or whether they can accept or book something at a given time, and before proposing a new or moved event. Its `free` field is the final answer: false means the time clashes with the listed conflicts. Give endsAt or durationMinutes; with neither, 30 minutes is assumed.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        from: { type: 'string', format: 'date-time' },
-        to: { type: 'string', format: 'date-time' },
+        startsAt: { type: 'string', description: 'Start, e.g. 2026-10-02T09:05 in the calendar timezone, or with an offset.' },
+        endsAt: { type: 'string' },
+        durationMinutes: { type: 'integer', minimum: 1, maximum: 1440 }
+      },
+      required: ['startsAt']
+    }
+  },
+  {
+    name: 'find_availability',
+    description: 'Find open slots of a given length within a date range, inside working hours only. An empty result means no slot within working hours, not that the whole range is booked. To check one specific time, use check_availability instead.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from: { type: 'string', description: 'Calendar-local time such as 2026-10-02T00:00, or ISO 8601 with an offset.' },
+        to: { type: 'string' },
         durationMinutes: { type: 'integer', minimum: 5, maximum: 1440 }
       },
       required: ['from', 'to', 'durationMinutes']
@@ -49,11 +63,12 @@ export const aiToolDefinitions = [
         title: { type: 'string' },
         description: { type: 'string' },
         location: { type: 'string' },
-        startsAt: { type: 'string', format: 'date-time' },
-        endsAt: { type: 'string', format: 'date-time' },
+        startsAt: { type: 'string', description: 'Calendar-local time such as 2026-10-02T09:00, or ISO 8601 with an offset.' },
+        endsAt: { type: 'string' },
         timeZone: { type: 'string' },
         reminderMinutes: { type: 'array', items: { type: 'integer' } },
-        recurrenceRrule: { type: 'string' }
+        recurrenceRrule: { type: 'string' },
+        savePastEvent: { type: 'boolean', description: 'Only after the user chose to save a time that has already passed as a past event. It is saved without reminders.' }
       },
       required: ['title', 'startsAt', 'endsAt', 'timeZone']
     }
@@ -70,10 +85,11 @@ export const aiToolDefinitions = [
         title: { type: 'string' },
         description: { type: 'string' },
         location: { type: 'string' },
-        startsAt: { type: 'string', format: 'date-time' },
-        endsAt: { type: 'string', format: 'date-time' },
+        startsAt: { type: 'string', description: 'Calendar-local time such as 2026-10-02T09:00, or ISO 8601 with an offset.' },
+        endsAt: { type: 'string' },
         timeZone: { type: 'string' },
-        reminderMinutes: { type: 'array', items: { type: 'integer' } }
+        reminderMinutes: { type: 'array', items: { type: 'integer' } },
+        savePastEvent: { type: 'boolean', description: 'Only after the user chose to save a time that has already passed as a past event. It is saved without reminders.' }
       },
       required: ['eventId', 'version']
     }
@@ -129,7 +145,8 @@ export const aiToolDefinitions = [
   }
 ];
 
-const iso = z.string().datetime({ offset: true });
+// An offset is optional: a time without one is read in the calendar timezone.
+const iso = z.string().datetime({ offset: true, local: true });
 const timezone = z.string().min(1).max(100).refine((value) => {
   try {
     Intl.DateTimeFormat(undefined, { timeZone: value });
@@ -141,6 +158,11 @@ const timezone = z.string().min(1).max(100).refine((value) => {
 
 export const aiToolSchemas = {
   list_events: z.object({ from: iso, to: iso, search: z.string().trim().max(100).optional() }),
+  check_availability: z.object({
+    startsAt: iso,
+    endsAt: iso.optional(),
+    durationMinutes: z.number().int().min(1).max(1440).optional()
+  }),
   find_availability: z.object({ from: iso, to: iso, durationMinutes: z.number().int().min(5).max(1440) }),
   list_contacts: z.object({}),
   list_groups: z.object({}),
@@ -152,8 +174,9 @@ export const aiToolSchemas = {
     endsAt: iso,
     timeZone: timezone,
     reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).optional(),
-    recurrenceRrule: z.string().max(2000).optional()
-  }).refine((value) => new Date(value.endsAt) > new Date(value.startsAt)),
+    recurrenceRrule: z.string().max(2000).optional(),
+    savePastEvent: z.boolean().optional()
+  }),
   propose_update_event: z.object({
     eventId: z.string().regex(/^[a-f\d]{24}$/i),
     version: z.number().int().min(0),
@@ -163,7 +186,8 @@ export const aiToolSchemas = {
     startsAt: iso.optional(),
     endsAt: iso.optional(),
     timeZone: timezone.optional(),
-    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).optional()
+    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).optional(),
+    savePastEvent: z.boolean().optional()
   }),
   propose_delete_event: z.object({
     eventId: z.string().regex(/^[a-f\d]{24}$/i),

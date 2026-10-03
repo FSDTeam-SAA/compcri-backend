@@ -15,6 +15,8 @@ supportRouter.post('/', validate({ body: z.object({
   name: z.string().trim().min(1).max(100),
   email: z.string().email(),
   phone: z.string().max(40).optional(),
+  // Required by the app; optional here so builds from before it still send.
+  subject: z.string().trim().min(1).max(150).optional(),
   note: z.string().trim().min(1).max(5000),
   mediaIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(5).optional()
 }) }), controller.createSupportRequest);

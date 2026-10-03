@@ -21,6 +21,11 @@ const validateRange = (from, to) => {
   if (to - from > MAX_RANGE_MS) throw new ApiError(400, 'Date range cannot exceed 366 days', 'DATE_RANGE_TOO_LARGE');
 };
 
+// Clients render the poster from its URL, so every event they read carries
+// the asset rather than a bare id. Only the public fields leave the server.
+const POSTER_FIELDS = 'secureUrl width height';
+const withPoster = (event) => event.populate('posterMediaId', POSTER_FIELDS);
+
 const durationMs = (event) => event.endsAt.getTime() - event.startsAt.getTime();
 
 export const expandEvent = (event, from, to) => {
@@ -207,12 +212,65 @@ export const alternativesFor = async (calendarId, startsAt, endsAt, conflicts, e
   return calendar ? suggestAlternatives(calendar, calendarId, startsAt, endsAt, conflicts, excludeId) : [];
 };
 
+const withinWorkingHours = (calendar, startsAt, endsAt) => {
+  const { workingDays, workdayStart, workdayEnd } = calendar.availability || {};
+  if (!workingDays || !workdayStart || !workdayEnd) return true;
+  const start = DateTime.fromJSDate(startsAt, { zone: calendar.timeZone });
+  const end = DateTime.fromJSDate(endsAt, { zone: calendar.timeZone });
+  if (!start.hasSame(end.minus({ milliseconds: 1 }), 'day')) return false;
+  if (!workingDays.includes(start.weekday % 7)) return false;
+  const [startHour, startMinute] = workdayStart.split(':').map(Number);
+  const [endHour, endMinute] = workdayEnd.split(':').map(Number);
+  return start >= start.set({ hour: startHour, minute: startMinute, second: 0, millisecond: 0 })
+    && end <= start.set({ hour: endHour, minute: endMinute, second: 0, millisecond: 0 });
+};
+
+/// Whether the user is free for exactly this time, decided here rather than
+/// by the assistant. Busy means an occurrence on the calendar overlaps it
+/// (the rule saves use, so back-to-back is not a clash) or, on the user's own
+/// calendar, a shared event they accepted does. A delegate who may only see
+/// their own events still learns the time is taken, just not by what.
+export const checkTime = async (userId, calendarId, startsAt, endsAt) => {
+  validateRange(startsAt, endsAt);
+  const access = await getCalendarAccess(userId, calendarId);
+  const events = await candidateEvents(calendarId, startsAt, endsAt);
+  const conflicts = events.flatMap((event) => {
+    const visible = access.capabilities.view !== 'OWN' || event.createdById.toString() === userId.toString();
+    return expandEvent(event, startsAt, endsAt).map((occurrence) => ({
+      ...(visible && { eventId: occurrence._id, title: occurrence.title }),
+      startsAt: occurrence.occurrenceStartAt,
+      endsAt: occurrence.occurrenceEndAt,
+      source: 'CALENDAR'
+    }));
+  });
+  if (access.isOwner) {
+    const shared = await listSharedEvents(userId, startsAt, endsAt);
+    for (const occurrence of shared) {
+      if (occurrence.rsvpStatus !== 'ACCEPTED') continue;
+      conflicts.push({
+        eventId: occurrence._id,
+        title: occurrence.title,
+        startsAt: occurrence.occurrenceStartAt,
+        endsAt: occurrence.occurrenceEndAt,
+        source: 'SHARED'
+      });
+    }
+  }
+  conflicts.sort((a, b) => a.startsAt - b.startsAt);
+  return {
+    free: conflicts.length === 0,
+    conflicts,
+    alternatives: await suggestAlternatives(access.calendar, calendarId, startsAt, endsAt, conflicts),
+    withinWorkingHours: withinWorkingHours(access.calendar, startsAt, endsAt)
+  };
+};
+
 export const listEvents = async (userId, calendarId, from, to, search) => {
   const rangeStart = new Date(from);
   const rangeEnd = new Date(to);
   validateRange(rangeStart, rangeEnd);
   const access = await getCalendarAccess(userId, calendarId);
-  const events = await candidateEvents(calendarId, rangeStart, rangeEnd);
+  const events = await withPoster(candidateEvents(calendarId, rangeStart, rangeEnd));
   const needle = search?.toLocaleLowerCase();
   return events.flatMap((event) => {
     const createdBySelf = event.createdById.toString() === userId.toString();
@@ -235,7 +293,7 @@ export const listSharedEvents = async (userId, from, to) => {
     ]
   });
   const eventIds = [...new Set(shares.map((share) => share.eventId.toString()))];
-  const events = await Event.find({
+  const events = await withPoster(Event.find({
     _id: { $in: eventIds },
     status: 'ACTIVE',
     $or: [
@@ -243,7 +301,7 @@ export const listSharedEvents = async (userId, from, to) => {
       { recurrenceRrule: { $in: [null, ''] }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } },
       { recurrenceRrule: { $exists: false }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } }
     ]
-  });
+  }));
   const responses = await EventResponse.find({ eventId: { $in: eventIds }, userId });
   const responseMap = new Map(responses.map((response) => [response.eventId.toString(), response.status]));
   const permissionRank = { VIEW_ONLY: 1, RESPOND: 2, EDIT: 3 };
@@ -263,6 +321,7 @@ export const listSharedEvents = async (userId, from, to) => {
 
 export const getEvent = async (userId, eventId) => {
   const access = await getEventAccess(userId, eventId);
+  await withPoster(access.event);
   return { event: access.event, permissions: { edit: access.canEdit, delete: access.canDelete, respond: access.canRespond }, accessSource: access.source };
 };
 
@@ -281,7 +340,7 @@ export const createEvent = async (userId, calendarId, input) => {
     throw new ApiError(StatusCodes.CONFLICT, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(access.calendar, calendarId, startsAt, endsAt, conflicts));
   }
   const { overrideConflicts, ...data } = input;
-  const event = await Event.create({ ...data, startsAt, endsAt, calendarId, createdById: userId, audit: [{ actorId: userId, action: 'CREATED' }] });
+  const event = await Event.create({ ...data, reminderMinutes: data.reminderMinutes ?? [10], startsAt, endsAt, calendarId, createdById: userId, audit: [{ actorId: userId, action: 'CREATED' }] });
   if (input.posterMediaId) {
     try {
       await claimMedia({ mediaId: input.posterMediaId, ownerId: userId, purpose: 'EVENT_POSTER', claimedByType: 'EVENT', claimedById: event._id });
@@ -298,6 +357,7 @@ export const createEvent = async (userId, calendarId, input) => {
     );
   }
   await scheduleEventReminders(event);
+  await withPoster(event);
   return { event, conflicts };
 };
 
@@ -335,6 +395,7 @@ export const updateEvent = async (userId, eventId, input) => {
     if (oldAsset) await deleteMediaAsset(oldAsset.ownerId, oldPosterId, { allowClaimed: true }).catch(() => undefined);
   }
   await scheduleEventReminders(access.event);
+  await withPoster(access.event);
   return { event: access.event, conflicts };
 };
 
@@ -382,6 +443,7 @@ export const setRecurrenceException = async (userId, eventId, input) => {
   access.event.audit.push({ actorId: userId, action: input.cancelled ? 'OCCURRENCE_CANCELLED' : 'OCCURRENCE_UPDATED', changes: { originalStartAt, overrides } });
   await access.event.save();
   await scheduleEventReminders(access.event);
+  await withPoster(access.event);
   return { event: access.event, conflicts };
 };
 
@@ -403,7 +465,7 @@ export const setCompleted = async (userId, eventId, completed, version) => {
   access.event.completedAt = completed ? new Date() : null;
   access.event.audit.push({ actorId: userId, action: completed ? 'COMPLETED' : 'REOPENED' });
   await access.event.save();
-  return access.event;
+  return withPoster(access.event);
 };
 
 export const shareEvent = async (userId, eventId, input) => {

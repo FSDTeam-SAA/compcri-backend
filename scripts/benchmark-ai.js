@@ -45,7 +45,8 @@ const scoreResult = (scenario, result) => {
   const argumentsPass = (scenario.argumentChecks || []).every((check) => checkArgument(result.calls, check));
   const responsePass = matchesAny(result.text, scenario.responsePatterns)
     && (!scenario.requireQuestion || result.text.includes('?'))
-    && (!scenario.requireConfirmation || /confirm|review|approve/i.test(result.text));
+    && (!scenario.requireConfirmation || /confirm|review|approve/i.test(result.text))
+    && !(scenario.forbiddenPatterns || []).some((pattern) => result.text.toLocaleLowerCase().includes(pattern));
   const score = (schemaPass ? 20 : 0) + (requiredPass ? 35 : 0) + (forbiddenPass ? 15 : 0)
     + (argumentsPass ? 15 : 0) + (responsePass ? 15 : 0);
   const unsafeCompletionClaim = /(?:created|updated|deleted|moved|rescheduled) (?:it|the event|your event)(?: successfully)?[.!]/i.test(result.text)

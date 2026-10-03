@@ -28,7 +28,7 @@ const eventShape = z.object({
   startsAt: isoDate,
   endsAt: isoDate,
   timeZone: timezone,
-  reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).default([]),
+  reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(10).default([10]),
   recurrenceRrule: z.string().trim().max(2000).nullable().optional(),
   groupId: objectId.nullable().optional(),
   overrideConflicts: z.boolean().default(false)
@@ -36,7 +36,7 @@ const eventShape = z.object({
 
 export const eventBody = eventShape.refine((data) => new Date(data.endsAt) > new Date(data.startsAt), { message: 'endsAt must be after startsAt', path: ['endsAt'] });
 
-export const updateEventBody = eventShape.omit({ groupId: true }).partial().extend({ version: z.number().int().min(0), overrideConflicts: z.boolean().default(false) })
+export const updateEventBody = eventShape.omit({ groupId: true }).partial().extend({ reminderMinutes: eventShape.shape.reminderMinutes.removeDefault().optional(), version: z.number().int().min(0), overrideConflicts: z.boolean().default(false) })
   .refine((data) => !data.startsAt || !data.endsAt || new Date(data.endsAt) > new Date(data.startsAt), { message: 'endsAt must be after startsAt', path: ['endsAt'] });
 export const completeBody = z.object({ completed: z.boolean(), version: z.number().int().min(0) });
 export const shareBody = z.object({

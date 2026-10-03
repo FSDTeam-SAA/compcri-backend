@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { LOCALES, PLANS, USER_ROLES, USER_STATUSES } from '../constants/enums.js';
+import { LOCALES, PLANS, TIME_FORMATS, USER_ROLES, USER_STATUSES } from '../constants/enums.js';
 import { env } from '../config/env.js';
 
 const notificationPreferencesSchema = new mongoose.Schema({
@@ -29,6 +29,10 @@ const userSchema = new mongoose.Schema({
   country: { type: String, trim: true, maxlength: 80 },
   city: { type: String, trim: true, maxlength: 80 },
   locale: { type: String, enum: LOCALES, default: 'en' },
+  // AUTO follows the phone, which the app reports as deviceUses24Hour so
+  // reminders and the assistant can write times the way the user reads them.
+  timeFormat: { type: String, enum: TIME_FORMATS, default: 'AUTO' },
+  deviceUses24Hour: Boolean,
   interests: [{ type: String, trim: true, maxlength: 50 }],
   // What this user calls the assistant. Empty means the app's own default,
   // so an account that never chose one follows the app rather than freezing

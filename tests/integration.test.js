@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { DateTime } from 'luxon';
 
 let replset;
 let app;
@@ -251,6 +252,54 @@ describe('calendar, quota, conflicts, and delegation', () => {
 
     const { formatDateTime } = await import('../utils/i18n.js');
     expect(formatDateTime('pt', new Date('2026-09-14T12:30:00.000Z'), 'America/Sao_Paulo')).toContain('09:30');
+    // An explicit clock format wins over the language, and noon and midnight
+    // never read as "12 AM" for noon or "0 PM".
+    expect(formatDateTime('pt', new Date('2026-09-14T18:00:00.000Z'), 'UTC', true)).toContain('6:00 PM');
+    expect(formatDateTime('en', new Date('2026-09-14T15:00:00.000Z'), 'UTC', false)).toContain('15:00');
+    expect(formatDateTime('en', new Date('2026-09-14T12:00:00.000Z'), 'UTC', true)).toContain('12:00 PM');
+    expect(formatDateTime('en', new Date('2026-09-14T00:00:00.000Z'), 'UTC', true)).toContain('12:00 AM');
+    expect(formatDateTime('en', new Date('2026-09-14T00:00:00.000Z'), 'UTC', false)).toContain('00:00');
+    const { uses24Hour } = await import('../utils/timeFormat.js');
+    expect(uses24Hour({ locale: 'en' })).toBe(false);
+    expect(uses24Hour({ locale: 'pt' })).toBe(true);
+    expect(uses24Hour({ locale: 'en', deviceUses24Hour: true })).toBe(true);
+    expect(uses24Hour({ locale: 'pt', timeFormat: 'H12', deviceUses24Hour: true })).toBe(false);
+  });
+
+  it('sends support the subject and screenshots, and keeps nothing when delivery fails', async () => {
+    const created = await register('support@example.com').expect(201);
+    const token = created.body.data.accessToken;
+    const ownerId = created.body.data.user._id;
+    const shot = (n) => models.MediaAsset.create({
+      ownerId, purpose: 'SUPPORT_ATTACHMENT', publicId: `support/${n}`, secureUrl: `https://cdn.example.com/support/${n}.png`
+    });
+    const [first, second] = await Promise.all([shot(1), shot(2)]);
+    const body = {
+      name: 'Ana', email: 'ana@example.com', subject: 'Reminder not working',
+      note: 'I set a reminder for 5 minutes before my event, but nothing rang.',
+      mediaIds: [first._id.toString(), second._id.toString()]
+    };
+    const { setMailTransportForTests } = await import('../services/mailer.service.js');
+
+    // Delivery fails: nothing is left behind, so sending again just works.
+    setMailTransportForTests({ sendMail: vi.fn().mockRejectedValue(new Error('SMTP down')) });
+    await request(app).post('/api/v1/support-requests').set(auth(token)).send(body).expect(500);
+    expect(await models.SupportRequest.countDocuments()).toBe(0);
+    expect(await models.MediaAsset.countDocuments({ claimedById: { $exists: true } })).toBe(0);
+
+    const sendMail = vi.fn().mockResolvedValue({});
+    setMailTransportForTests({ sendMail });
+    try {
+      const sent = await request(app).post('/api/v1/support-requests').set(auth(token)).send(body).expect(201);
+      expect(sent.body.data).toMatchObject({ subject: 'Reminder not working', mediaIds: body.mediaIds });
+    } finally {
+      setMailTransportForTests(null);
+    }
+    const mail = sendMail.mock.calls[0][0];
+    expect(mail.subject).toBe('[Support] Reminder not working — Ana');
+    expect(mail.text).toContain('Subject: Reminder not working');
+    expect(mail.text).toContain('https://cdn.example.com/support/1.png');
+    expect(mail.text).toContain('https://cdn.example.com/support/2.png');
   });
 
   it('blocks the 51st owned monthly occurrence on the free plan', async () => {
@@ -382,7 +431,7 @@ describe('network, subscriptions, notifications, and AI', () => {
     await models.User.updateOne({ email: 'ai@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
     const aiModule = await import('../services/ai.service.js');
     const responses = [
-      { functionCalls: [{ id: 'call1', name: 'propose_create_event', args: { title: 'AI meeting', startsAt: '2026-08-27T09:00:00.000Z', endsAt: '2026-08-27T10:00:00.000Z', timeZone: 'UTC' } }], usageMetadata: {} },
+      { functionCalls: [{ id: 'call1', name: 'propose_create_event', args: { title: 'AI meeting', startsAt: '2030-08-27T09:00:00.000Z', endsAt: '2030-08-27T10:00:00.000Z', timeZone: 'UTC' } }], usageMetadata: {} },
       { text: 'I prepared the event for your confirmation.', usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 8 } }
     ];
     aiModule.setAiClientForTests({ chats: { create: () => ({ sendMessage: vi.fn(async () => responses.shift()) }) } });
@@ -402,7 +451,7 @@ describe('network, subscriptions, notifications, and AI', () => {
     const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
     await models.User.updateOne({ email: 'stream@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
     const aiModule = await import('../services/ai.service.js');
-    const args = { title: 'Streamed meeting', startsAt: '2026-09-04T09:00:00.000Z', endsAt: '2026-09-04T10:00:00.000Z', timeZone: 'UTC' };
+    const args = { title: 'Streamed meeting', startsAt: '2030-09-04T09:00:00.000Z', endsAt: '2030-09-04T10:00:00.000Z', timeZone: 'UTC' };
     const turns = [
       // The model thinks out loud, calls a tool, then writes the real answer.
       [{ text: 'Let me check' }, { functionCalls: [{ id: 'call-stream', name: 'propose_create_event', args }], usageMetadata: {} }],
@@ -629,7 +678,7 @@ describe('network, subscriptions, notifications, and AI', () => {
     const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
     await models.User.updateOne({ email: 'fallback-openai@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
     const aiModule = await import('../services/ai.service.js');
-    const args = { title: 'Fallback meeting', startsAt: '2026-09-02T09:00:00.000Z', endsAt: '2026-09-02T10:00:00.000Z', timeZone: 'UTC' };
+    const args = { title: 'Fallback meeting', startsAt: '2030-09-02T09:00:00.000Z', endsAt: '2030-09-02T10:00:00.000Z', timeZone: 'UTC' };
     const geminiSend = vi.fn()
       .mockResolvedValueOnce({ functionCalls: [{ id: 'gemini-call', name: 'propose_create_event', args }], usageMetadata: { promptTokenCount: 10 } })
       .mockRejectedValueOnce(Object.assign(new Error('Gemini unavailable'), { status: 503 }));
@@ -677,7 +726,7 @@ describe('network, subscriptions, notifications, and AI', () => {
     const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
     await models.User.updateOne({ email: 'both-fail@example.com' }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
     const aiModule = await import('../services/ai.service.js');
-    const args = { title: 'Never persisted', startsAt: '2026-09-03T09:00:00.000Z', endsAt: '2026-09-03T10:00:00.000Z', timeZone: 'UTC' };
+    const args = { title: 'Never persisted', startsAt: '2030-09-03T09:00:00.000Z', endsAt: '2030-09-03T10:00:00.000Z', timeZone: 'UTC' };
     aiModule.setAiProviderClientForTests('gemini', {
       chats: { create: () => ({ sendMessage: vi.fn()
         .mockResolvedValueOnce({ functionCalls: [{ id: 'g-fail', name: 'propose_create_event', args }], usageMetadata: {} })
@@ -927,4 +976,245 @@ describe('single-occurrence edits (QA F07/F08)', () => {
       '2026-09-13T23:10:00.000Z', '2026-09-15T23:10:00.000Z'
     ]);
   });
+});
+
+describe('assistant availability answers (free/busy decided by the server)', () => {
+  const ZONE = 'America/Sao_Paulo';
+
+  // A premium user whose calendar lives in a UTC-3 zone, so a model that
+  // compared UTC timestamps with the user's wall clock would get it wrong.
+  const premiumUser = async (email) => {
+    const user = await register(email).expect(201);
+    const token = user.body.data.accessToken;
+    const userId = user.body.data.user._id;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ email }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    await models.Calendar.updateOne({ _id: calendarId }, { $set: { timeZone: ZONE } });
+    return { token, userId, calendarId };
+  };
+
+  const tomorrow = () => DateTime.now().setZone(ZONE).plus({ days: 1 }).toISODate();
+  const at = (time) => DateTime.fromISO(`${tomorrow()}T${time}`, { zone: ZONE }).toJSDate();
+
+  const addEvent = (calendarId, userId, title, start, end) => models.Event.create({
+    calendarId, createdById: userId, title, startsAt: at(start), endsAt: at(end), timeZone: ZONE
+  });
+
+  // Plays the model: asks for `calls` first, then answers. What the server
+  // sent back for those calls is what the test inspects.
+  const scriptModel = async (calls) => {
+    const aiModule = await import('../services/ai.service.js');
+    const sendMessage = vi.fn()
+      .mockResolvedValueOnce({ functionCalls: calls, usageMetadata: {} })
+      .mockResolvedValueOnce({ text: 'Answered from the tool.', usageMetadata: {} });
+    aiModule.setAiProviderClientForTests('gemini', { chats: { create: () => ({ sendMessage }) } });
+    return () => sendMessage.mock.calls[1][0].message.map((part) => part.functionResponse.response.output);
+  };
+
+  const ask = async ({ token, calendarId }, content) => {
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    return request(app).post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages`)
+      .set(auth(token)).send({ content }).expect(200);
+  };
+
+  it('says busy at 9:05 when a 9-to-10 appointment exists, and free right after it', async () => {
+    const owner = await premiumUser('busy-at-905@example.com');
+    await addEvent(owner.calendarId, owner.userId, 'Recording', '09:00', '10:00');
+    const toolOutputs = await scriptModel([
+      // The time exactly as the user said it, with no offset and no length.
+      { id: 'at-905', name: 'check_availability', args: { startsAt: `${tomorrow()}T09:05` } },
+      { id: 'at-10', name: 'check_availability', args: { startsAt: `${tomorrow()}T10:00`, durationMinutes: 30 } }
+    ]);
+
+    await ask(owner, 'I have an appointment at 9:05. Can I accept it?');
+    const [busy, afterwards] = toolOutputs();
+
+    expect(busy.free).toBe(false);
+    expect(busy.summary).toMatch(/^NOT FREE/);
+    expect(busy.requested.start).toBe(`${tomorrow()}T09:05:00-03:00`);
+    expect(busy.requested.durationAssumed).toBe(true);
+    expect(busy.conflicts).toEqual([expect.objectContaining({
+      title: 'Recording', start: `${tomorrow()}T09:00:00-03:00`, end: `${tomorrow()}T10:00:00-03:00`
+    })]);
+    // An English speaker on the default (AUTO, no phone setting reported)
+    // reads 12-hour times.
+    expect(busy.conflicts[0].when).toMatch(/9:00 AM–10:00 AM$/);
+    // Right before and right after the clash, nearest to 09:05 first.
+    expect(busy.alternatives.slice(0, 2).map((slot) => slot.start)).toEqual([
+      `${tomorrow()}T08:30:00-03:00`, `${tomorrow()}T10:00:00-03:00`
+    ]);
+
+    // Touching the end of an event is not a clash.
+    expect(afterwards.free).toBe(true);
+    expect(afterwards.conflicts).toEqual([]);
+  });
+
+  it('counts shared events the user accepted, and not ones still pending', async () => {
+    const owner = await premiumUser('shared-busy@example.com');
+    const friend = await premiumUser('shared-host@example.com');
+    const accepted = await addEvent(friend.calendarId, friend.userId, 'Team lunch', '12:00', '13:00');
+    const pending = await addEvent(friend.calendarId, friend.userId, 'Maybe drinks', '18:00', '19:00');
+    for (const event of [accepted, pending]) {
+      await models.EventShare.create({ eventId: event._id, sharedById: friend.userId, targetType: 'USER', targetId: owner.userId, permission: 'RESPOND' });
+    }
+    await models.EventResponse.create({ eventId: accepted._id, userId: owner.userId, status: 'ACCEPTED' });
+    await models.EventResponse.create({ eventId: pending._id, userId: owner.userId, status: 'PENDING' });
+    const toolOutputs = await scriptModel([
+      { id: 'lunch', name: 'check_availability', args: { startsAt: `${tomorrow()}T12:30`, durationMinutes: 30 } },
+      { id: 'evening', name: 'check_availability', args: { startsAt: `${tomorrow()}T18:00`, durationMinutes: 60 } }
+    ]);
+
+    await ask(owner, 'Am I free at 12:30 and at 6pm tomorrow?');
+    const [lunch, evening] = toolOutputs();
+
+    expect(lunch.free).toBe(false);
+    expect(lunch.conflicts[0]).toEqual(expect.objectContaining({ title: 'Team lunch', sharedWithUser: true }));
+    expect(evening.free).toBe(true);
+  });
+
+  it('keeps an event its length when moved by start time, and tells the model what it would clash with', async () => {
+    const owner = await premiumUser('move-clash@example.com');
+    const standup = await addEvent(owner.calendarId, owner.userId, 'Standup', '09:00', '10:00');
+    await addEvent(owner.calendarId, owner.userId, 'Client call', '11:00', '12:00');
+    const toolOutputs = await scriptModel([
+      { id: 'move', name: 'propose_update_event', args: { eventId: standup._id.toString(), version: 0, startsAt: `${tomorrow()}T10:30` } }
+    ]);
+
+    const reply = await ask(owner, 'Move my standup to 10:30 tomorrow.');
+    const [proposal] = toolOutputs();
+
+    const staged = reply.body.data.pendingActions[0];
+    expect(new Date(staged.payload.startsAt)).toEqual(at('10:30'));
+    expect(new Date(staged.payload.endsAt)).toEqual(at('11:30'));
+    expect(proposal.requiresConfirmation).toBe(true);
+    expect(proposal.proposedTime.when).toMatch(/10:30 AM–11:30 AM$/);
+    expect(proposal.free).toBe(false);
+    expect(proposal.conflicts).toEqual([expect.objectContaining({ title: 'Client call' })]);
+  });
+
+  it('stops a chat-made event at a time that has already passed, and saves it only when asked', async () => {
+    const owner = await premiumUser('past-time@example.com');
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const event = { title: 'Dinner', startsAt: `${yesterday}T21:00`, endsAt: `${yesterday}T22:00`, timeZone: ZONE, reminderMinutes: [10] };
+    let toolOutputs = await scriptModel([{ id: 'past', name: 'propose_create_event', args: event }]);
+
+    let reply = await ask(owner, 'Dinner at 9pm');
+    const [warning] = toolOutputs();
+    expect(warning.passed).toBe(true);
+    expect(warning.summary).toMatch(/^TIME ALREADY PASSED: .*9:00 PM–10:00 PM/);
+    expect(warning.summary).toMatch(/Never move it to tomorrow/);
+    expect(reply.body.data.pendingActions).toEqual([]);
+
+    toolOutputs = await scriptModel([{ id: 'past-ok', name: 'propose_create_event', args: { ...event, savePastEvent: true } }]);
+    reply = await ask(owner, 'Save it as a past event');
+    const [staged] = reply.body.data.pendingActions;
+    expect(staged.type).toBe('CREATE_EVENT');
+    expect(staged.payload.reminderMinutes).toEqual([]);
+    expect(staged.payload.savePastEvent).toBeUndefined();
+  });
+
+  it('writes times for the assistant in the format the user chose', async () => {
+    const owner = await premiumUser('clock-24@example.com');
+    await models.User.updateOne({ _id: owner.userId }, { $set: { timeFormat: 'H24' } });
+    await addEvent(owner.calendarId, owner.userId, 'Dinner', '21:45', '22:45');
+    const toolOutputs = await scriptModel([
+      { id: 'list', name: 'list_events', args: { from: `${tomorrow()}T00:00`, to: `${tomorrow()}T23:59` } }
+    ]);
+
+    await ask(owner, 'What do I have tomorrow?');
+    const [listed] = toolOutputs();
+    expect(listed.events[0].when).toMatch(/21:45–22:45$/);
+    expect(listed.events[0].when).not.toMatch(/AM|PM/);
+  });
+
+  it('hands a backwards time range back to the model instead of failing the turn', async () => {
+    const owner = await premiumUser('backwards-range@example.com');
+    const toolOutputs = await scriptModel([
+      { id: 'backwards', name: 'list_events', args: { from: `${tomorrow()}T18:00`, to: `${tomorrow()}T08:00` } }
+    ]);
+
+    const reply = await ask(owner, 'What do I have tomorrow?');
+
+    expect(reply.body.data.message.content).toBe('Answered from the tool.');
+    expect(toolOutputs()[0].error.code).toBe('INVALID_TIME_RANGE');
+  });
+});
+
+
+describe('reminders in manual and AI event flows', () => {
+  const prepare = async (email) => {
+    const registered = await register(email).expect(201);
+    const token = registered.body.data.accessToken;
+    const me = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data;
+    await models.User.updateOne({ _id: me.user._id }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const start = new Date(Date.now() + 30 * 60000);
+    return { token, calendarId: me.primaryCalendar._id, input: {
+      title: 'Reminder test', startsAt: start.toISOString(),
+      endsAt: new Date(start.getTime() + 30 * 60000).toISOString(), timeZone: 'UTC'
+    } };
+  };
+
+  it.each([undefined, [5], []])('manual creation schedules the default, five-minute reminder, or explicit opt-out: %j', async (reminderMinutes) => {
+    const { token, calendarId, input } = await prepare('manual-reminder@example.com');
+    const jobs = await import('../jobs/agenda.js');
+    const enqueue = vi.spyOn(jobs, 'enqueueJob').mockResolvedValue(null);
+    try {
+      const created = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token))
+        .send({ ...input, ...(reminderMinutes !== undefined && { reminderMinutes }) }).expect(201);
+      const expected = reminderMinutes ?? [10];
+      expect(created.body.data.event.reminderMinutes).toEqual(expected);
+      if (expected.length) {
+        expect(enqueue).toHaveBeenCalledWith('send-event-reminder', expect.objectContaining({
+          eventId: created.body.data.event._id, minutes: expected[0]
+        }), new Date(new Date(input.startsAt).getTime() - expected[0] * 60000));
+      } else expect(enqueue).not.toHaveBeenCalled();
+      const event = created.body.data.event;
+      await request(app).patch(`/api/v1/events/${event._id}`).set(auth(token))
+        .send({ title: 'Renamed reminder test', version: event.__v }).expect(200);
+      expect((await models.Event.findById(event._id)).reminderMinutes).toEqual(expected);
+    } finally { enqueue.mockRestore(); }
+  });
+
+  it.each([undefined, [5], []])('AI confirmation schedules the same default, five-minute reminder, or opt-out: %j', async (reminderMinutes) => {
+    const { token, calendarId, input } = await prepare('ai-reminder@example.com');
+    const ai = await import('../services/ai.service.js');
+    const replies = [
+      { functionCalls: [{ id: 'reminder', name: 'propose_create_event', args: { ...input, ...(reminderMinutes !== undefined && { reminderMinutes }) } }], usageMetadata: {} },
+      { text: 'Ready to confirm.', usageMetadata: {} }
+    ];
+    ai.setAiClientForTests({ chats: { create: () => ({ sendMessage: vi.fn(async () => replies.shift()) }) } });
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    const reply = await request(app).post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages`).set(auth(token))
+      .send({ content: 'Create an event with a reminder' }).expect(200);
+    const pending = reply.body.data.pendingActions[0];
+    expect(pending.payload.reminderMinutes).toEqual(reminderMinutes ?? [10]);
+    const jobs = await import('../jobs/agenda.js');
+    const enqueue = vi.spyOn(jobs, 'enqueueJob').mockResolvedValue(null);
+    try {
+      await request(app).post(`/api/v1/ai/actions/${pending._id}/confirm`).set(auth(token)).send({}).expect(200);
+      const saved = await models.Event.findOne({ title: input.title });
+      expect(saved.reminderMinutes).toEqual(reminderMinutes ?? [10]);
+      if (reminderMinutes?.length === 0) expect(enqueue).not.toHaveBeenCalled();
+      else expect(enqueue).toHaveBeenCalledWith('send-event-reminder', expect.objectContaining({
+        eventId: saved._id.toString(), minutes: (reminderMinutes ?? [10])[0]
+      }), expect.any(Date));
+    } finally { enqueue.mockRestore(); }
+  });
+});
+
+
+it('stores and enqueues a silent reminder, honors opt-out, and accepts a full-length event title', async () => {
+  const registered = await register('reminder-delivery@example.com').expect(201);
+  const id = registered.body.data.user._id;
+  const jobs = await import('../jobs/agenda.js');
+  const enqueue = vi.spyOn(jobs, 'enqueueJob').mockResolvedValue(null);
+  const { createNotification } = await import('../services/notification.service.js');
+  try {
+    const notification = await createNotification(id, 'REMINDER', 'A'.repeat(180), 'Starts {time}', { eventId: 'event' }, { time: '12:10' });
+    expect(notification.title).toHaveLength(160);
+    expect(enqueue).toHaveBeenCalledWith('deliver-notification', { notificationId: notification._id.toString() });
+    await models.User.updateOne({ _id: id }, { $set: { 'notificationPreferences.reminders': false } });
+    expect(await createNotification(id, 'REMINDER', 'Disabled', 'Starts now')).toBeNull();
+    expect(await models.Notification.countDocuments({ userId: id })).toBe(1);
+  } finally { enqueue.mockRestore(); }
 });

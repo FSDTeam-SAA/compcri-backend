@@ -16,6 +16,11 @@ const getTransporter = () => {
   return transporter;
 };
 
+/// For tests: stands in for SMTP, or null to go back to the configured one.
+export const setMailTransportForTests = (value) => {
+  transporter = value;
+};
+
 export const sendMail = async ({ to, subject, text, html }) => {
   const client = getTransporter();
   if (!client) {

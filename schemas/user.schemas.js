@@ -9,6 +9,8 @@ export const updateProfileSchema = z.object({
   country: z.string().trim().max(80).optional(),
   city: z.string().trim().max(80).optional(),
   locale: z.enum(['en', 'pt', 'es']).optional(),
+  timeFormat: z.enum(['AUTO', 'H12', 'H24']).optional(),
+  deviceUses24Hour: z.boolean().optional(),
   interests: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
   assistantName: z.string().trim().max(40).optional(),
   aiPersonalizationConsent: z.boolean().optional(),

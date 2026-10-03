@@ -5,6 +5,7 @@ const supportRequestSchema = new mongoose.Schema({
   name: { type: String, required: true, maxlength: 100 },
   email: { type: String, required: true, lowercase: true },
   phone: { type: String, maxlength: 40 },
+  subject: { type: String, maxlength: 150 },
   note: { type: String, required: true, maxlength: 5000 },
   mediaIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'MediaAsset' }],
   status: { type: String, enum: ['OPEN', 'CLOSED'], default: 'OPEN' }
