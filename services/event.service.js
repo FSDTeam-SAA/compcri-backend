@@ -13,6 +13,9 @@ import { claimMedia, deleteMediaAsset } from './media.service.js';
 import { createNotification } from './notification.service.js';
 import { scheduleEventReminders } from '../jobs/reminders.js';
 import { assertValidRecurrence, recurrenceBetween } from '../utils/recurrence.js';
+import { expandEvent, eventRangeQuery } from '../utils/eventOccurrences.js';
+import { withEventTimeReminder } from '../utils/reminders.js';
+export { expandEvent } from '../utils/eventOccurrences.js';
 
 const MAX_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 
@@ -28,53 +31,30 @@ const withPoster = (event) => event.populate('posterMediaId', POSTER_FIELDS);
 
 const durationMs = (event) => event.endsAt.getTime() - event.startsAt.getTime();
 
-export const expandEvent = (event, from, to) => {
-  const raw = event.toObject ? event.toObject() : event;
-  if (!raw.recurrenceRrule) {
-    if (raw.startsAt < to && raw.endsAt > from) {
-      return [{ ...raw, occurrenceStartAt: raw.startsAt, occurrenceEndAt: raw.endsAt, occurrenceOriginalStartAt: raw.startsAt }];
-    }
-    return [];
-  }
-  const starts = recurrenceBetween({
-    recurrenceRrule: raw.recurrenceRrule,
-    startsAt: raw.startsAt,
-    timeZone: raw.timeZone,
-    from: new Date(from.getTime() - durationMs(raw)),
-    to
-  });
-  return starts.map((start) => {
-    const exception = raw.recurrenceExceptions?.find((item) => new Date(item.originalStartAt).getTime() === start.getTime());
-    if (exception?.cancelled) return null;
-    const occurrence = {
-      ...raw,
-      ...(exception?.overrides || {}),
-      occurrenceStartAt: exception?.overrides?.startsAt ? new Date(exception.overrides.startsAt) : start,
-      occurrenceEndAt: exception?.overrides?.endsAt ? new Date(exception.overrides.endsAt) : new Date(start.getTime() + durationMs(raw)),
-      // The untouched slot this occurrence was generated from. Once an
-      // occurrence carries an override, occurrenceStartAt is the moved time,
-      // which setRecurrenceException would no longer recognise; clients must
-      // send this value back as originalStartAt to address the right date.
-      occurrenceOriginalStartAt: start
-    };
-    return occurrence.occurrenceStartAt < to && occurrence.occurrenceEndAt > from ? occurrence : null;
-  }).filter(Boolean);
-};
-
 const candidateEvents = (calendarId, from, to, excludeId) => Event.find({
   calendarId,
   status: 'ACTIVE',
   ...(excludeId && { _id: { $ne: excludeId } }),
-  $or: [
-    { recurrenceRrule: { $exists: true, $nin: [null, ''] }, startsAt: { $lt: to } },
-    { recurrenceRrule: { $in: [null, ''] }, startsAt: { $lt: to }, endsAt: { $gt: from } },
-    { recurrenceRrule: { $exists: false }, startsAt: { $lt: to }, endsAt: { $gt: from } }
-  ]
+  ...eventRangeQuery(from, to)
 });
 
+const busyOccurrences = async (calendarId, from, to, excludeId) => {
+  const events = await candidateEvents(calendarId, from, to, excludeId);
+  const busy = events.flatMap((event) => expandEvent(event, from, to));
+  const calendar = await Calendar.findById(calendarId).select('ownerId');
+  if (calendar) {
+    const shared = await listSharedEvents(calendar.ownerId, from, to);
+    for (const occurrence of shared) {
+      if (occurrence.rsvpStatus !== 'ACCEPTED' || occurrence._id.toString() === excludeId?.toString()) continue;
+      if (!busy.some((row) => row._id.toString() === occurrence._id.toString() && +row.occurrenceOriginalStartAt === +occurrence.occurrenceOriginalStartAt)) busy.push(occurrence);
+    }
+  }
+  return busy;
+};
+
 export const findConflicts = async (calendarId, startsAt, endsAt, excludeId) => {
-  const events = await candidateEvents(calendarId, startsAt, endsAt, excludeId);
-  return events.flatMap((event) => expandEvent(event, startsAt, endsAt))
+  const busy = await busyOccurrences(calendarId, startsAt, endsAt, excludeId);
+  return busy
     .filter((occurrence) => occurrence.occurrenceStartAt < endsAt && occurrence.occurrenceEndAt > startsAt)
     .map((occurrence) => ({
       eventId: occurrence._id,
@@ -82,6 +62,12 @@ export const findConflicts = async (calendarId, startsAt, endsAt, excludeId) => 
       startsAt: occurrence.occurrenceStartAt,
       endsAt: occurrence.occurrenceEndAt
     }));
+};
+
+const visibleConflicts = async (userId, capabilities, conflicts) => {
+  if (capabilities?.view === 'ALL' || !conflicts.length) return conflicts;
+  const visible = new Set((await Event.find({ _id: { $in: conflicts.map((item) => item.eventId) }, createdById: userId }).distinct('_id')).map(String));
+  return conflicts.map((item) => visible.has(item.eventId.toString()) ? item : { startsAt: item.startsAt, endsAt: item.endsAt });
 };
 
 const countMonthOccurrences = async (calendarId, startsAt, excludeId) => {
@@ -111,8 +97,7 @@ const isPremiumCalendar = async (calendar) => {
 };
 
 const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, durationMinutes, excludeId) => {
-  const events = await candidateEvents(calendarId, rangeStart, rangeEnd, excludeId);
-  const busy = events.flatMap((event) => expandEvent(event, rangeStart, rangeEnd));
+  const busy = await busyOccurrences(calendarId, rangeStart, rangeEnd, excludeId);
   const slots = [];
   const duration = durationMinutes * 60_000;
   const zone = calendar.timeZone;
@@ -124,7 +109,8 @@ const computeAvailability = async (calendar, calendarId, rangeStart, rangeEnd, d
     const [startHour, startMinute] = calendar.availability.workdayStart.split(':').map(Number);
     const [endHour, endMinute] = calendar.availability.workdayEnd.split(':').map(Number);
     const dayStart = localDay.set({ hour: startHour, minute: startMinute }).toUTC().toJSDate();
-    const dayEnd = localDay.set({ hour: endHour, minute: endMinute }).toUTC().toJSDate();
+    const workdayEnd = localDay.set({ hour: endHour, minute: endMinute }).toUTC().toJSDate();
+    const dayEnd = new Date(Math.min(workdayEnd.getTime(), rangeEnd.getTime()));
     if (dayEnd <= rangeStart || dayStart >= rangeEnd) continue;
     let candidate = dayStart < rangeStart ? new Date(rangeStart) : dayStart;
     const dayBusy = busy.filter((item) => item.occurrenceStartAt < dayEnd && item.occurrenceEndAt > dayStart).sort((a, b) => a.occurrenceStartAt - b.occurrenceStartAt);
@@ -196,7 +182,7 @@ export const checkConflicts = async (userId, calendarId, from, to, excludeEventI
   const endsAt = new Date(to);
   validateRange(startsAt, endsAt);
   const access = await getCalendarAccess(userId, calendarId);
-  const conflicts = await findConflicts(calendarId, startsAt, endsAt, excludeEventId);
+  const conflicts = await visibleConflicts(userId, access.capabilities, await findConflicts(calendarId, startsAt, endsAt, excludeEventId));
   return {
     conflicts,
     alternatives: await suggestAlternatives(access.calendar, calendarId, startsAt, endsAt, conflicts, excludeEventId),
@@ -276,7 +262,15 @@ export const listEvents = async (userId, calendarId, from, to, search) => {
     const createdBySelf = event.createdById.toString() === userId.toString();
     if (access.capabilities.view === 'OWN' && !createdBySelf) return [];
     if (needle && ![event.title, event.description, event.location].some((value) => value?.toLocaleLowerCase().includes(needle))) return [];
-    return expandEvent(event, rangeStart, rangeEnd);
+    return expandEvent(event, rangeStart, rangeEnd).map((occurrence) => ({
+      ...occurrence,
+      permissions: {
+        edit: access.capabilities.edit === 'ALL' || (access.capabilities.edit === 'OWN' && createdBySelf),
+        delete: access.capabilities.delete === 'ALL' || (access.capabilities.delete === 'OWN' && createdBySelf),
+        respond: false,
+        share: access.isOwner || access.delegation?.preset === 'FULL_ACCESS'
+      }
+    }));
   }).sort((a, b) => a.occurrenceStartAt - b.occurrenceStartAt);
 };
 
@@ -296,11 +290,7 @@ export const listSharedEvents = async (userId, from, to) => {
   const events = await withPoster(Event.find({
     _id: { $in: eventIds },
     status: 'ACTIVE',
-    $or: [
-      { recurrenceRrule: { $exists: true, $nin: [null, ''] }, startsAt: { $lt: rangeEnd } },
-      { recurrenceRrule: { $in: [null, ''] }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } },
-      { recurrenceRrule: { $exists: false }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } }
-    ]
+    ...eventRangeQuery(rangeStart, rangeEnd)
   }));
   const responses = await EventResponse.find({ eventId: { $in: eventIds }, userId });
   const responseMap = new Map(responses.map((response) => [response.eventId.toString(), response.status]));
@@ -315,14 +305,32 @@ export const listSharedEvents = async (userId, from, to) => {
     ...occurrence,
     sharePermission: shareMap.get(event._id.toString())?.permission,
     shareSource: shareMap.get(event._id.toString())?.targetType,
-    rsvpStatus: responseMap.get(event._id.toString()) || 'PENDING'
+    rsvpStatus: responseMap.get(event._id.toString()) || 'PENDING',
+    permissions: {
+      edit: shareMap.get(event._id.toString())?.permission === 'EDIT',
+      delete: false,
+      respond: ['RESPOND', 'EDIT'].includes(shareMap.get(event._id.toString())?.permission),
+      share: false
+    }
   }))).sort((a, b) => a.occurrenceStartAt - b.occurrenceStartAt);
 };
 
 export const getEvent = async (userId, eventId) => {
   const access = await getEventAccess(userId, eventId);
   await withPoster(access.event);
-  return { event: access.event, permissions: { edit: access.canEdit, delete: access.canDelete, respond: access.canRespond }, accessSource: access.source };
+  const event = access.event.toObject();
+  if (access.share) {
+    const response = await EventResponse.findOne({ eventId, userId });
+    Object.assign(event, {
+      sharePermission: access.share.permission,
+      shareSource: access.share.targetType,
+      rsvpStatus: response?.status || 'PENDING'
+    });
+  }
+  return { event, permissions: {
+    edit: access.canEdit, delete: access.canDelete, respond: access.canRespond,
+    share: access.source === 'OWNER' || access.calendarAccess?.delegation?.preset === 'FULL_ACCESS'
+  }, accessSource: access.source };
 };
 
 export const createEvent = async (userId, calendarId, input) => {
@@ -335,7 +343,7 @@ export const createEvent = async (userId, calendarId, input) => {
   assertValidRecurrence(input.recurrenceRrule, startsAt, input.timeZone);
   await assertQuota(access.calendar, startsAt, input.recurrenceRrule);
   const premium = await isPremiumCalendar(access.calendar);
-  const conflicts = premium ? await findConflicts(calendarId, startsAt, endsAt) : [];
+  const conflicts = premium ? await visibleConflicts(userId, access.capabilities, await findConflicts(calendarId, startsAt, endsAt)) : [];
   if (conflicts.length && !input.overrideConflicts) {
     throw new ApiError(StatusCodes.CONFLICT, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(access.calendar, calendarId, startsAt, endsAt, conflicts));
   }
@@ -375,7 +383,7 @@ export const updateEvent = async (userId, eventId, input) => {
     await assertQuota(calendar, startsAt, recurrenceRrule, access.event._id);
   }
   const premium = await isPremiumCalendar(calendar);
-  const conflicts = premium ? await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id) : [];
+  const conflicts = premium ? await visibleConflicts(userId, access.calendarAccess?.capabilities, await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id)) : [];
   if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Event overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts, access.event._id));
   const { version, overrideConflicts, ...changes } = input;
   const oldPosterId = access.event.posterMediaId;
@@ -424,13 +432,25 @@ export const setRecurrenceException = async (userId, eventId, input) => {
   const matched = recurrenceBetween({ recurrenceRrule: access.event.recurrenceRrule, startsAt: access.event.startsAt, timeZone: access.event.timeZone, from: new Date(originalStartAt.getTime() - 1000), to: new Date(originalStartAt.getTime() + 1000) });
   if (!matched.some((item) => item.getTime() === originalStartAt.getTime())) throw new ApiError(422, 'The occurrence is not part of this recurrence', 'INVALID_OCCURRENCE');
 
-  const overrides = input.overrides || {};
+  const previous = access.event.recurrenceExceptions.find((item) => item.originalStartAt.getTime() === originalStartAt.getTime());
+  const oldOverrides = previous?.overrides || {};
+  const overrides = { ...oldOverrides, ...input.overrides };
+  if (input.overrides?.reminderMinutes !== undefined) {
+    overrides.reminderMinutes = withEventTimeReminder(input.overrides.reminderMinutes);
+  }
+  const oldStart = oldOverrides.startsAt ? new Date(oldOverrides.startsAt) : originalStartAt;
+  const oldEnd = oldOverrides.endsAt ? new Date(oldOverrides.endsAt) : new Date(oldStart.getTime() + durationMs(access.event));
   const startsAt = overrides.startsAt ? new Date(overrides.startsAt) : originalStartAt;
-  const endsAt = overrides.endsAt ? new Date(overrides.endsAt) : new Date(startsAt.getTime() + durationMs(access.event));
+  // Moving only the start carries the existing duration. A title-only edit
+  // keeps the earlier time override instead of reverting to the series.
+  const endsAt = input.overrides?.startsAt && !input.overrides.endsAt
+    ? new Date(startsAt.getTime() + oldEnd.getTime() - oldStart.getTime())
+    : overrides.endsAt ? new Date(overrides.endsAt) : new Date(startsAt.getTime() + durationMs(access.event));
+  if (!input.cancelled && endsAt <= startsAt) throw new ApiError(422, 'Event end must be after its start', 'INVALID_EVENT_RANGE');
   let conflicts = [];
   if (!input.cancelled && (overrides.startsAt || overrides.endsAt)) {
     const calendar = access.calendarAccess?.calendar || await Calendar.findById(access.event.calendarId);
-    if (await isPremiumCalendar(calendar)) conflicts = await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id);
+    if (await isPremiumCalendar(calendar)) conflicts = await visibleConflicts(userId, access.calendarAccess?.capabilities, await findConflicts(access.event.calendarId, startsAt, endsAt, access.event._id));
     if (conflicts.length && !input.overrideConflicts) throw new ApiError(409, 'Occurrence overlaps with existing events', 'EVENT_CONFLICT', await conflictDetails(calendar, access.event.calendarId, startsAt, endsAt, conflicts, access.event._id));
   }
 
@@ -438,7 +458,7 @@ export const setRecurrenceException = async (userId, eventId, input) => {
   access.event.recurrenceExceptions.push({
     originalStartAt,
     cancelled: input.cancelled,
-    overrides: input.cancelled ? undefined : { ...overrides, ...(overrides.startsAt && { startsAt }), ...(overrides.endsAt && { endsAt }) }
+    overrides: input.cancelled ? undefined : { ...overrides, startsAt, endsAt }
   });
   access.event.audit.push({ actorId: userId, action: input.cancelled ? 'OCCURRENCE_CANCELLED' : 'OCCURRENCE_UPDATED', changes: { originalStartAt, overrides } });
   await access.event.save();

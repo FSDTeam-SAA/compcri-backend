@@ -68,7 +68,8 @@ export const recurrenceExceptionBody = z.object({
     description: z.string().trim().max(5000).optional(),
     location: z.string().trim().max(300).optional(),
     startsAt: isoDate.optional(),
-    endsAt: isoDate.optional()
+    endsAt: isoDate.optional(),
+    reminderMinutes: z.array(z.number().int().min(0).max(525600)).max(11).optional()
   }).optional(),
   version: z.number().int().min(0),
   overrideConflicts: z.boolean().default(false)

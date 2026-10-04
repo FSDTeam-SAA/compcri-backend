@@ -43,16 +43,17 @@ export const getEventAccess = async (userId, eventOrId) => {
       calendarAccess
     };
   } catch (error) {
-    if (error.code !== 'CALENDAR_ACCESS_DENIED') throw error;
+    if (!['CALENDAR_ACCESS_DENIED', 'EVENT_ACCESS_DENIED'].includes(error.code)) throw error;
   }
 
-  const directShare = await EventShare.findOne({ eventId: event._id, targetType: 'USER', targetId: userId, status: 'ACTIVE' });
-  let groupShare;
-  if (!directShare) {
-    const groups = await Group.find({ 'members.userId': userId, status: 'ACTIVE' }).select('_id');
-    groupShare = await EventShare.findOne({ eventId: event._id, targetType: 'GROUP', targetId: { $in: groups.map((g) => g._id) }, status: 'ACTIVE' });
-  }
-  const share = directShare || groupShare;
+  const groups = await Group.find({ 'members.userId': userId, status: 'ACTIVE' }).select('_id');
+  const shares = await EventShare.find({ eventId: event._id, status: 'ACTIVE', $or: [
+    { targetType: 'USER', targetId: userId },
+    { targetType: 'GROUP', targetId: { $in: groups.map((g) => g._id) } }
+  ] });
+  // A direct invitation must not hide the stronger access granted by a group.
+  const rank = { VIEW_ONLY: 1, RESPOND: 2, EDIT: 3 };
+  const share = shares.sort((a, b) => rank[b.permission] - rank[a.permission])[0];
   if (!share) throw new ApiError(403, 'Event access denied', 'EVENT_ACCESS_DENIED');
   return {
     event,
@@ -64,4 +65,3 @@ export const getEventAccess = async (userId, eventOrId) => {
     share
   };
 };
-

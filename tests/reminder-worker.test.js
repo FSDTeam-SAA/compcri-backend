@@ -43,7 +43,57 @@ const owner = async () => {
   return { user, calendar };
 };
 
+const runDueReminder = async (eventId) => {
+  await mongoose.connection.db.collection('agendaJobs').updateMany({ name: 'send-event-reminder', 'data.eventId': eventId.toString() }, { $set: { nextRunAt: new Date() } });
+  await agenda.start();
+};
+
 describe('persisted reminders and the worker', () => {
+  it('does not notify a guest after sharing has been revoked, despite an old accepted RSVP', async () => {
+    const { user, calendar } = await owner();
+    const guest = await models.User.create({ email: 'revoked@example.com', contactCode: 'REVOKED', revenueCatAppUserId: 'revoked' });
+    const startsAt = new Date(Date.now() + 120000);
+    const { event } = await createEvent(user._id, calendar._id, { title: 'Private event', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC' });
+    await models.EventShare.create({ eventId: event._id, sharedById: user._id, targetType: 'USER', targetId: guest._id, permission: 'RESPOND', status: 'REVOKED' });
+    await models.EventResponse.create({ eventId: event._id, userId: guest._id, status: 'ACCEPTED' });
+    await runDueReminder(event._id);
+    await vi.waitFor(() => expect(transport).toHaveBeenCalledOnce(), { timeout: 5000 });
+    expect(await models.Notification.countDocuments({ userId: guest._id, category: 'REMINDER' })).toBe(0);
+    expect(await models.Notification.countDocuments({ userId: user._id, category: 'REMINDER' })).toBe(1);
+    expect((await agenda.queryJobs({ name: 'send-event-reminder' })).jobs[0].failCount || 0).toBe(0);
+  });
+
+  it('uses the edited occurrence title and notifies a currently accepted family guest', async () => {
+    const { user, calendar } = await owner();
+    const guest = await models.User.create({ email: 'accepted@example.com', contactCode: 'ACCEPTED', revenueCatAppUserId: 'accepted' });
+    const startsAt = new Date(Math.ceil((Date.now() + 120000) / 1000) * 1000);
+    const event = await models.Event.create({ calendarId: calendar._id, createdById: user._id, title: 'Series title', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC', recurrenceRrule: 'FREQ=DAILY;COUNT=2', reminderMinutes: [0], recurrenceExceptions: [{ originalStartAt: startsAt, overrides: { title: 'Edited occurrence' } }] });
+    await models.EventShare.create({ eventId: event._id, sharedById: user._id, targetType: 'USER', targetId: guest._id, permission: 'RESPOND' });
+    await models.EventResponse.create({ eventId: event._id, userId: guest._id, status: 'ACCEPTED' });
+    await enqueueJob('send-event-reminder', { eventId: event._id.toString(), occurrenceStartAt: startsAt.toISOString(), minutes: 0 });
+    await agenda.start();
+    await vi.waitFor(async () => expect(await models.Notification.countDocuments({ category: 'REMINDER' })).toBe(2), { timeout: 5000 });
+    expect((await models.Notification.find({ category: 'REMINDER' })).map((item) => item.title)).toEqual(['Edited occurrence', 'Edited occurrence']);
+    await vi.waitFor(() => expect(transport).toHaveBeenCalledOnce(), { timeout: 5000 });
+  });
+
+  it.each(['moved', 'disabled', 'cancelled'])('ignores an already-claimed reminder after the event was %s', async (change) => {
+    const { user, calendar } = await owner();
+    const startsAt = new Date(Math.ceil((Date.now() + 120000) / 1000) * 1000);
+    const event = await models.Event.create({ calendarId: calendar._id, createdById: user._id, title: 'Changed appointment', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC', reminderMinutes: [0] });
+    if (change === 'moved') { event.startsAt = new Date(+startsAt + 7200000); event.endsAt = new Date(+startsAt + 10800000); }
+    if (change === 'disabled') event.reminderMinutes = [];
+    if (change === 'cancelled') event.status = 'CANCELLED';
+    await event.save();
+    await enqueueJob('send-event-reminder', { eventId: event._id.toString(), occurrenceStartAt: startsAt.toISOString(), minutes: 0 });
+    await agenda.start();
+    await vi.waitFor(async () => {
+      const jobs = (await agenda.queryJobs({ name: 'send-event-reminder' })).jobs;
+      expect(jobs[0].lastFinishedAt).toBeTruthy();
+    }, { timeout: 5000 });
+    expect(await models.Notification.countDocuments({ category: 'REMINDER' })).toBe(0);
+    expect(transport).not.toHaveBeenCalled();
+  });
   it('delivers a default reminder for a two-minute event through the actual Agenda worker', async () => {
     const { user, calendar } = await owner();
     const startsAt = new Date(Date.now() + 120000);
@@ -88,6 +138,25 @@ describe('persisted reminders and the worker', () => {
       const jobs = await agenda.queryJobs({ name: 'send-event-reminder' });
       expect(jobs.total).toBe(2);
       expect(jobs.jobs.map((job) => job.data.minutes).sort((a, b) => a - b)).toEqual([0, 10]);
+    }, { timeout: 5000 });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('refreshes an enabled occurrence when reminders are off for its series', async () => {
+    const { user, calendar } = await owner();
+    const startsAt = new Date(Date.now() + 1800000);
+    await models.Event.create({
+      calendarId: calendar._id, createdById: user._id, title: 'One reminder',
+      startsAt, endsAt: new Date(startsAt.getTime() + 3600000), timeZone: 'UTC',
+      recurrenceRrule: 'FREQ=DAILY;COUNT=2', reminderMinutes: [],
+      recurrenceExceptions: [{ originalStartAt: startsAt, overrides: { reminderMinutes: [0, 15] } }]
+    });
+    await enqueueJob('refresh-event-reminders', {});
+    await agenda.start();
+    await vi.waitFor(async () => {
+      const jobs = await agenda.queryJobs({ name: 'send-event-reminder' });
+      expect(jobs.total).toBe(2);
+      expect(jobs.jobs.map((job) => job.data.minutes).sort((a, b) => a - b)).toEqual([0, 15]);
     }, { timeout: 5000 });
     expect(transport).not.toHaveBeenCalled();
   });

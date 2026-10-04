@@ -32,7 +32,21 @@ export const openapi = {
       NoteInput: { type: 'object', required: ['calendarId', 'body'], properties: { calendarId: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, eventId: { type: 'string' }, pinned: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } } } },
       RegisterInput: { type: 'object', required: ['email', 'password', 'termsVersion', 'termsAccepted'], properties: { email: { type: 'string', format: 'email' }, password: { type: 'string', minLength: 10 }, displayName: { type: 'string' }, timeZone: { type: 'string' }, termsVersion: { type: 'string' }, privacyVersion: { type: 'string' }, termsAccepted: { const: true } } },
       LoginInput: { type: 'object', required: ['email', 'password'], properties: { email: { type: 'string', format: 'email' }, password: { type: 'string' } } },
-      EventInput: { type: 'object', required: ['title', 'startsAt', 'endsAt', 'timeZone'], properties: { title: { type: 'string' }, description: { type: 'string' }, location: { type: 'string' }, startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: 'string', format: 'date-time' }, timeZone: { type: 'string' }, reminderMinutes: { type: 'array', default: [0], description: 'Notification at event start is enabled by default. Positive minutes add advance notifications. [] disables all reminders for the event.', items: { type: 'integer', minimum: 0 } }, recurrenceRrule: { type: 'string' }, overrideConflicts: { type: 'boolean' } } }
+      EventInput: { type: 'object', required: ['title', 'startsAt', 'endsAt', 'timeZone'], properties: { title: { type: 'string' }, description: { type: 'string' }, location: { type: 'string' }, startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: 'string', format: 'date-time' }, timeZone: { type: 'string' }, reminderMinutes: { type: 'array', default: [0], description: 'Notification at event start is enabled by default. Positive minutes add advance notifications. [] disables all reminders for the event.', items: { type: 'integer', minimum: 0 } }, recurrenceRrule: { type: 'string' }, overrideConflicts: { type: 'boolean' } } },
+      RecurrenceExceptionInput: {
+        type: 'object', required: ['originalStartAt', 'version'],
+        properties: {
+          originalStartAt: { type: 'string', format: 'date-time', description: 'The untouched slot returned as occurrenceOriginalStartAt, even after this occurrence has moved.' },
+          version: { type: 'integer', minimum: 0 }, cancelled: { type: 'boolean', default: false }, overrideConflicts: { type: 'boolean', default: false },
+          overrides: {
+            type: 'object', properties: {
+              title: { type: 'string', minLength: 1, maxLength: 180 }, description: { type: 'string', maxLength: 5000 }, location: { type: 'string', maxLength: 300 },
+              startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: 'string', format: 'date-time' },
+              reminderMinutes: { type: 'array', maxItems: 11, items: { type: 'integer', minimum: 0, maximum: 525600 }, description: 'Overrides reminders for this occurrence only. An advance reminder includes the event-time alert. [] disables this occurrence; omission preserves its existing setting.' }
+            }
+          }
+        }
+      }
     }
   },
   paths: {
@@ -64,7 +78,7 @@ export const openapi = {
     '/events/{eventId}/completion': { patch: operation('Set completion state', { parameters: [id('eventId')] }) },
     '/events/{eventId}/shares': { get: operation('List event shares', { parameters: [id('eventId')] }), post: operation('Share event with users or groups', { parameters: [id('eventId')] }) },
     '/events/{eventId}/shares/{shareId}': { delete: operation('Revoke event share', { parameters: [id('eventId'), id('shareId')] }) },
-    '/events/{eventId}/recurrence-exception': { put: operation('Create or replace an occurrence exception', { parameters: [id('eventId')] }) },
+    '/events/{eventId}/recurrence-exception': { put: operation('Edit or cancel one recurring occurrence', { parameters: [id('eventId')], requestBody: { $ref: '#/components/schemas/RecurrenceExceptionInput' } }) },
     '/events/{eventId}/rsvp': { put: operation('Respond to event', { parameters: [id('eventId')] }) },
     '/delegations': { get: operation('List assistants'), post: operation('Create assistant access') },
     '/delegations/lookup': { post: operation('Lookup assistant email') },

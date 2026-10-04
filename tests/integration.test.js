@@ -566,7 +566,8 @@ describe('network, subscriptions, notifications, and AI', () => {
       audio: { transcriptions: { create: transcribe }, speech: { create: createSpeech } }
     });
 
-    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId }).expect(201);
+    const conversation = await request(app).post('/api/v1/ai/conversations').set(auth(token)).send({ calendarId });
+    expect(conversation.status, JSON.stringify(conversation.body)).toBe(201);
     const reply = await request(app)
       .post(`/api/v1/ai/conversations/${conversation.body.data._id}/voice-messages`)
       .set(auth(token))
@@ -930,6 +931,98 @@ describe('admin APIs', () => {
 });
 
 describe('single-occurrence edits (QA F07/F08)', () => {
+  const dailyEvent = async () => {
+    const owner = await register('daily-edit@example.com').expect(201);
+    const token = owner.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ _id: owner.body.data.user._id }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const created = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({
+      title: 'Daily appointment', description: 'Keep these notes', location: 'Office',
+      startsAt: '2026-10-03T12:00:00.000Z', endsAt: '2026-10-03T13:00:00.000Z',
+      timeZone: 'America/Sao_Paulo', reminderMinutes: [], recurrenceRrule: 'FREQ=DAILY;COUNT=3'
+    }).expect(201);
+    const eventId = created.body.data.event._id;
+    const edit = (body, status = 200) => request(app).put(`/api/v1/events/${eventId}/recurrence-exception`).set(auth(token)).send(body).expect(status);
+    const list = async (day) => (await request(app).get(`/api/v1/calendars/${calendarId}/events`).query({
+      from: `${day}T00:00:00.000Z`, to: `${day}T23:59:59.999Z`
+    }).set(auth(token)).expect(200)).body.data;
+    return { token, calendarId, eventId, edit, list };
+  };
+
+  it('saves a daily appointment at 10:30 and edits it again without losing its original slot or notes', async () => {
+    const { edit, list } = await dailyEvent();
+    const originalStartAt = '2026-10-03T12:00:00.000Z'; // 09:00 local
+    await edit({ originalStartAt, version: 0, overrides: {
+      startsAt: '2026-10-03T13:30:00.000Z', endsAt: '2026-10-03T14:30:00.000Z', description: 'Edited notes'
+    } });
+    const moved = (await list('2026-10-03'))[0];
+    expect(moved.occurrenceOriginalStartAt).toBe(originalStartAt);
+    expect(moved.startsAt).toBe(originalStartAt);
+    expect(moved.occurrenceStartAt).toBe('2026-10-03T13:30:00.000Z');
+    await edit({ originalStartAt: moved.occurrenceOriginalStartAt, version: 1, overrides: { title: 'Renamed' } });
+    const renamed = (await list('2026-10-03'))[0];
+    expect(renamed.occurrenceStartAt).toBe('2026-10-03T13:30:00.000Z');
+    expect(renamed.occurrenceEndAt).toBe('2026-10-03T14:30:00.000Z');
+    expect(renamed.description).toBe('Edited notes');
+    expect(renamed.location).toBe('Office');
+    await edit({ originalStartAt, version: 2, overrides: { startsAt: '2026-10-03T14:30:00.000Z' } });
+    expect((await list('2026-10-03'))[0].occurrenceEndAt).toBe('2026-10-03T15:30:00.000Z');
+    await edit({ originalStartAt, version: 3, overrides: { endsAt: '2026-10-03T14:00:00.000Z' } }, 422);
+    expect((await list('2026-10-03'))[0].occurrenceEndAt).toBe('2026-10-03T15:30:00.000Z');
+    await edit({ originalStartAt, version: 3, cancelled: true });
+    expect(await list('2026-10-03')).toEqual([]);
+    expect(await list('2026-10-04')).toHaveLength(1);
+  });
+
+  it('saves and preserves a reminder for just one daily occurrence', async () => {
+    const { edit, list } = await dailyEvent();
+    const originalStartAt = '2026-10-04T12:00:00.000Z';
+    const updated = await edit({ originalStartAt, version: 0, overrides: { reminderMinutes: [15] } });
+    expect(updated.body.data.event.reminderMinutes).toEqual([]);
+    expect((await list('2026-10-04'))[0].reminderMinutes).toEqual([0, 15]);
+    expect((await list('2026-10-03'))[0].reminderMinutes).toEqual([]);
+    await edit({ originalStartAt, version: 1, overrides: { title: 'Keep the reminder' } });
+    expect((await list('2026-10-04'))[0].reminderMinutes).toEqual([0, 15]);
+    await edit({ originalStartAt, version: 2, overrides: { reminderMinutes: [] } });
+    expect((await list('2026-10-04'))[0].reminderMinutes).toEqual([]);
+    await edit({ originalStartAt, version: 3, overrides: { reminderMinutes: [525601] } }, 422);
+  });
+
+  it('keeps an occurrence moved outside its original day visible, shared, and busy at the new time', async () => {
+    const { token, calendarId, eventId, edit, list } = await dailyEvent();
+    const guest = await register('moved-guest@example.com').expect(201);
+    await edit({ originalStartAt: '2026-10-04T12:00:00.000Z', version: 0, overrides: {
+      startsAt: '2026-09-30T13:30:00.000Z', endsAt: '2026-09-30T14:30:00.000Z'
+    } });
+    expect(await list('2026-10-04')).toEqual([]);
+    const moved = await list('2026-09-30');
+    expect(moved).toHaveLength(1);
+    expect(moved[0].occurrenceOriginalStartAt).toBe('2026-10-04T12:00:00.000Z');
+    const busy = await request(app).get(`/api/v1/calendars/${calendarId}/conflicts`).query({
+      startsAt: '2026-09-30T13:45:00.000Z', endsAt: '2026-09-30T14:00:00.000Z'
+    }).set(auth(token)).expect(200);
+    expect(busy.body.data.conflicts).toHaveLength(1);
+    await request(app).post(`/api/v1/events/${eventId}/shares`).set(auth(token)).send({
+      targetType: 'USER', targetIds: [guest.body.data.user._id], permission: 'RESPOND'
+    }).expect(200);
+    const shared = await request(app).get('/api/v1/events/shared').query({
+      from: '2026-09-30T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z'
+    }).set(auth(guest.body.data.accessToken)).expect(200);
+    expect(shared.body.data).toHaveLength(1);
+    expect(shared.body.data[0].occurrenceOriginalStartAt).toBe(moved[0].occurrenceOriginalStartAt);
+    const contactRequest = await request(app).post('/api/v1/contact-requests').set(auth(token)).send({
+      contactCode: guest.body.data.user.contactCode, relation: 'Friend'
+    }).expect(201);
+    await request(app).put(`/api/v1/contact-requests/${contactRequest.body.data._id}`).set(auth(guest.body.data.accessToken)).send({
+      action: 'ACCEPT', relation: 'Friend'
+    }).expect(200);
+    const contactEvents = await request(app).get(`/api/v1/contacts/${guest.body.data.user._id}/events`).query({
+      from: '2026-09-30T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z'
+    }).set(auth(token)).expect(200);
+    expect(contactEvents.body.data).toHaveLength(1);
+    expect(contactEvents.body.data[0].occurrenceOriginalStartAt).toBe(moved[0].occurrenceOriginalStartAt);
+  });
+
   it('addresses a moved occurrence by its original slot, leaving the series origin alone', async () => {
     const owner = await register('occurrence@example.com').expect(201);
     const token = owner.body.data.accessToken;

@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import Session from '../models/Session.js';
 import Otp from '../models/Otp.js';
 import Calendar from '../models/Calendar.js';
+import Note from '../models/Note.js';
 import Event from '../models/Event.js';
 import Delegation from '../models/Delegation.js';
 import Contact from '../models/Contact.js';
@@ -63,6 +64,7 @@ export const purgeAccount = async (userId) => {
     EventShare.deleteMany({ $or: [{ targetType: 'USER', targetId: userId }, { sharedById: userId }] }),
     EventResponse.deleteMany({ userId }),
     Notification.deleteMany({ userId }),
+    Note.deleteMany({ userId }),
     Device.deleteMany({ userId }),
     Conversation.deleteMany({ userId }),
     PendingAiAction.deleteMany({ requestedById: userId }),

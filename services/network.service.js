@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { StatusCodes } from 'http-status-codes';
 import User from '../models/User.js';
 import Contact from '../models/Contact.js';
+import { eventRangeQuery } from '../utils/eventOccurrences.js';
 import ContactRequest from '../models/ContactRequest.js';
 import Group from '../models/Group.js';
 import GroupInvitation from '../models/GroupInvitation.js';
@@ -101,11 +102,7 @@ export const listContactEvents = async (userId, otherId, from, to) => {
     _id: { $in: shares.map((share) => share.eventId) },
     createdById: { $in: [userId, otherId] },
     status: 'ACTIVE',
-    $or: [
-      { recurrenceRrule: { $exists: true, $nin: [null, ''] }, startsAt: { $lt: rangeEnd } },
-      { recurrenceRrule: { $in: [null, ''] }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } },
-      { recurrenceRrule: { $exists: false }, startsAt: { $lt: rangeEnd }, endsAt: { $gt: rangeStart } }
-    ]
+    ...eventRangeQuery(rangeStart, rangeEnd)
   });
   return events.flatMap((event) => eventService.expandEvent(event, rangeStart, rangeEnd)).sort((a, b) => a.occurrenceStartAt - b.occurrenceStartAt);
 };
@@ -133,6 +130,7 @@ export const joinGroup = async (userId, code) => {
   if (group.members.some((member) => member.userId.toString() === userId.toString())) throw new ApiError(409, 'You are already in this group', 'GROUP_MEMBER_EXISTS');
   group.members.push({ userId, role: 'MEMBER' });
   await group.save();
+  await GroupInvitation.updateMany({ groupId: group._id, recipientId: userId, status: 'PENDING' }, { $set: { status: 'ACCEPTED', respondedAt: new Date() } });
   await createNotification(group.ownerId, 'GROUP_UPDATE', 'Group member joined', 'A new member joined your group', { groupId: group._id });
   return group;
 };
@@ -193,6 +191,7 @@ export const deleteGroup = async (userId, groupId) => {
   if (!group) throw new ApiError(404, 'Group not found', 'GROUP_NOT_FOUND');
   group.status = 'DELETED';
   await group.save();
+  await GroupInvitation.updateMany({ groupId: group._id, status: 'PENDING' }, { $set: { status: 'CANCELLED', respondedAt: new Date() } });
 };
 
 export const transferGroupOwnership = async (userId, groupId, successorId) => {
@@ -252,7 +251,5 @@ export const createGroupEvent = async (userId, groupId, input) => {
   if (!group) throw new ApiError(404, 'Group not found', 'GROUP_NOT_FOUND');
   const calendar = await Calendar.findOne({ ownerId: userId });
   if (!calendar) throw new ApiError(404, 'Primary calendar not found', 'CALENDAR_NOT_FOUND');
-  const result = await eventService.createEvent(userId, calendar._id, { ...input, groupId });
-  await eventService.shareEvent(userId, result.event._id, { targetType: 'GROUP', targetIds: [groupId], permission: 'RESPOND' });
-  return result;
+  return eventService.createEvent(userId, calendar._id, { ...input, groupId });
 };

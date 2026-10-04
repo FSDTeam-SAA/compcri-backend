@@ -15,6 +15,9 @@ import { AccountDeletion } from '../models/Operations.js';
 import { createNotification, deliverPush } from '../services/notification.service.js';
 import Notification from '../models/Notification.js';
 import { EventResponse } from '../models/EventShare.js';
+import { getEventAccess } from '../services/calendarAccess.service.js';
+import { expandEvent } from '../utils/eventOccurrences.js';
+import { withEventTimeReminder } from '../utils/reminders.js';
 import { purgeAccount } from '../services/accountDeletion.service.js';
 import { markWebhookProcessed, reconcileSubscriber } from '../services/revenuecat.service.js';
 import { deleteMediaAsset } from '../services/media.service.js';
@@ -57,13 +60,23 @@ agenda.define('deliver-notification', async (job) => {
 
 agenda.define('send-event-reminder', async (job) => {
   await withRetry(job, async () => {
-    const { eventId, occurrenceStartAt } = job.attrs.data;
+    const { eventId, occurrenceStartAt, minutes = 0 } = job.attrs.data;
     const event = await Event.findById(eventId).populate({ path: 'calendarId', select: 'ownerId' });
-    if (!event || event.status !== 'ACTIVE') return;
+    if (!event || event.status !== 'ACTIVE' || !event.calendarId) return;
+    const at = new Date(occurrenceStartAt);
+    const row = expandEvent(event, at, new Date(at.getTime() + 1)).find((item) => +item.occurrenceStartAt === +at);
+    // A job already claimed when an edit happened may survive cancellation.
+    if (!row || !withEventTimeReminder(row.reminderMinutes || []).includes(minutes)) return;
     const responses = await EventResponse.find({ eventId, status: { $in: ['ACCEPTED', 'MAYBE'] } }).select('userId');
     const recipients = new Set([event.calendarId.ownerId.toString(), ...responses.map((response) => response.userId.toString())]);
     for (const recipientId of recipients) {
-      await createNotification(recipientId, 'REMINDER', event.title, 'Starts {time}', { eventId }, {
+      try {
+        await getEventAccess(recipientId, event);
+      } catch (error) {
+        if ([403, 404].includes(error.statusCode)) continue;
+        throw error;
+      }
+      await createNotification(recipientId, 'REMINDER', row.title, 'Starts {time}', { eventId }, {
         time: (locale, recipient) => formatDateTime(locale, new Date(occurrenceStartAt), event.timeZone, !uses24Hour(recipient))
       });
     }
@@ -97,10 +110,16 @@ agenda.define('purge-due-accounts', async () => {
 
 agenda.define('refresh-event-reminders', async () => {
   const events = Event.find({
-    status: 'ACTIVE', reminderMinutes: { $exists: true, $ne: [] },
-    $or: [
-      { startsAt: { $gt: new Date() } },
-      { recurrenceRrule: { $exists: true, $nin: [null, ''] } }
+    status: 'ACTIVE',
+    $and: [
+      { $or: [
+        { reminderMinutes: { $exists: true, $ne: [] } },
+        { recurrenceExceptions: { $elemMatch: { cancelled: { $ne: true }, 'overrides.reminderMinutes': { $exists: true, $ne: [] } } } }
+      ] },
+      { $or: [
+        { startsAt: { $gt: new Date() } },
+        { recurrenceRrule: { $exists: true, $nin: [null, ''] } }
+      ] }
     ]
   }).cursor();
   const { scheduleEventReminders } = await import('./reminders.js');
