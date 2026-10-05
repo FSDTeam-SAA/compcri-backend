@@ -18,8 +18,18 @@ describe('reminder notification delivery', () => {
     const payload = mocks.send.mock.calls[0][0];
     expect(payload.android.priority).toBe('high');
     expect(payload.data).toMatchObject({ category: 'REMINDER', alarm: String(alarmReminders), notificationId: 'notification-id' });
-    expect(payload.android.notification.channelId).toBe(alarmReminders ? 'aurox_alarms' : 'aurox_reminders_silent');
-    expect(payload.apns.payload.aps.sound).toBe(alarmReminders ? 'default' : undefined);
+    expect(payload.android.notification.channelId).toBe(alarmReminders ? 'aurox_alarms' : 'aurox_reminders');
+    // A reminder is never silent; the alarm setting decides how loud.
+    expect(payload.apns.payload.aps.sound).toBe('default');
+    expect(payload.android.notification.sound).toBe('default');
+    expect(payload.apns.payload.aps['interruption-level']).toBe(alarmReminders ? 'time-sensitive' : 'active');
+  });
+  it('keeps invitations and updates quiet', async () => {
+    mocks.user.mockResolvedValue({ notificationPreferences: { pushEnabled: true, invitations: true, alarmReminders: true } });
+    await deliverPush({ ...notification, category: 'INVITATION' });
+    const payload = mocks.send.mock.calls[0][0];
+    expect(payload.android.notification.channelId).toBe('aurox_reminders_silent');
+    expect(payload.apns.payload.aps.sound).toBeUndefined();
   });
   it.each([{ pushEnabled: false }, { reminders: false }])('respects the explicit opt-out %j', async (preferences) => {
     mocks.user.mockResolvedValue({ notificationPreferences: preferences });

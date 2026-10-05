@@ -20,10 +20,13 @@ export const deliverPush = async (notification, retryTokens) => {
   if (key && user.notificationPreferences?.[key] === false) return;
   const devices = await Device.find({ userId: notification.userId, ...(retryTokens && { token: { $in: retryTokens } }) });
   if (!devices.length) return;
-  // A reminder someone asked to be alarmed by rings on its own channel and
-  // interrupts a Focus; everything else arrives the quiet way.
-  const urgent = notification.category === 'REMINDER'
-    && user.notificationPreferences?.alarmReminders === true;
+  // Every reminder makes the phone's notification sound: a silent one was
+  // missed so easily that it read as reminders not working. One someone asked
+  // to be alarmed by rings like an alarm on its own channel and breaks
+  // through a Focus. Everything else (invitations, updates) stays quiet.
+  const reminder = notification.category === 'REMINDER';
+  const urgent = reminder && user.notificationPreferences?.alarmReminders === true;
+  const channelId = urgent ? 'aurox_alarms' : reminder ? 'aurox_reminders' : 'aurox_reminders_silent';
   const response = await sendMulticast({
     tokens: devices.map((item) => item.token),
     notification: { title: notification.title, body: notification.body },
@@ -36,15 +39,15 @@ export const deliverPush = async (notification, retryTokens) => {
     android: {
       priority: notification.category === 'REMINDER' ? 'high' : 'normal',
       notification: {
-        channelId: urgent ? 'aurox_alarms' : 'aurox_reminders_silent',
-        ...(urgent && { sound: 'default', defaultVibrateTimings: true })
+        channelId,
+        ...(reminder && { sound: 'default', defaultVibrateTimings: true })
       }
     },
     apns: {
       headers: { 'apns-priority': '10' },
       payload: {
         aps: {
-          sound: urgent ? 'default' : undefined,
+          sound: reminder ? 'default' : undefined,
           // 'time-sensitive' breaks through a Focus; it needs the matching
           // capability on the App ID, which the shipped profile carries.
           'interruption-level': urgent ? 'time-sensitive' : 'active'
