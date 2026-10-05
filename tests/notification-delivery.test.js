@@ -18,10 +18,10 @@ describe('reminder notification delivery', () => {
     const payload = mocks.send.mock.calls[0][0];
     expect(payload.android.priority).toBe('high');
     expect(payload.data).toMatchObject({ category: 'REMINDER', alarm: String(alarmReminders), notificationId: 'notification-id' });
-    expect(payload.android.notification.channelId).toBe(alarmReminders ? 'aurox_alarms' : 'aurox_reminders');
-    // A reminder is never silent; the alarm setting decides how loud.
-    expect(payload.apns.payload.aps.sound).toBe('default');
-    expect(payload.android.notification.sound).toBe('default');
+    expect(payload.android.notification.channelId).toBe(alarmReminders ? 'aurox_alarms' : 'aurox_reminders_v2');
+    // A reminder is never silent: the app's own sound, or the phone's alarm.
+    expect(payload.apns.payload.aps.sound).toBe(alarmReminders ? 'default' : 'aurox_reminder.caf');
+    expect(payload.android.notification.sound).toBe(alarmReminders ? 'default' : 'aurox_reminder');
     expect(payload.apns.payload.aps['interruption-level']).toBe(alarmReminders ? 'time-sensitive' : 'active');
   });
   it('keeps invitations and updates quiet', async () => {

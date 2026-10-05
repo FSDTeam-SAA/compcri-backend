@@ -13,6 +13,10 @@ const preferenceKey = {
   SUBSCRIPTION: 'subscriptionUpdates'
 };
 
+/// The reminder sound shipped in the app: res/raw/aurox_reminder.wav on
+/// Android, aurox_reminder.caf in the iOS bundle.
+const REMINDER_SOUND = 'aurox_reminder';
+
 export const deliverPush = async (notification, retryTokens) => {
   const user = await User.findById(notification.userId).select('notificationPreferences');
   if (!user || user.notificationPreferences?.pushEnabled === false) return;
@@ -26,7 +30,11 @@ export const deliverPush = async (notification, retryTokens) => {
   // through a Focus. Everything else (invitations, updates) stays quiet.
   const reminder = notification.category === 'REMINDER';
   const urgent = reminder && user.notificationPreferences?.alarmReminders === true;
-  const channelId = urgent ? 'aurox_alarms' : reminder ? 'aurox_reminders' : 'aurox_reminders_silent';
+  // A plain reminder plays the app's own sound, bundled in the app so it is
+  // the same on every phone (some phones have no default notification sound).
+  // Changing it: see REMINDER_CHANNEL in the Android MainActivity.
+  const channelId = urgent ? 'aurox_alarms' : reminder ? 'aurox_reminders_v2' : 'aurox_reminders_silent';
+  const sound = urgent ? 'default' : reminder ? REMINDER_SOUND : undefined;
   const response = await sendMulticast({
     tokens: devices.map((item) => item.token),
     notification: { title: notification.title, body: notification.body },
@@ -40,14 +48,14 @@ export const deliverPush = async (notification, retryTokens) => {
       priority: notification.category === 'REMINDER' ? 'high' : 'normal',
       notification: {
         channelId,
-        ...(reminder && { sound: 'default', defaultVibrateTimings: true })
+        ...(reminder && { sound: urgent ? 'default' : REMINDER_SOUND, defaultVibrateTimings: true })
       }
     },
     apns: {
       headers: { 'apns-priority': '10' },
       payload: {
         aps: {
-          sound: reminder ? 'default' : undefined,
+          sound: sound && (urgent ? sound : `${sound}.caf`),
           // 'time-sensitive' breaks through a Focus; it needs the matching
           // capability on the App ID, which the shipped profile carries.
           'interruption-level': urgent ? 'time-sensitive' : 'active'
