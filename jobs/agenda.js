@@ -76,7 +76,13 @@ agenda.define('send-event-reminder', async (job) => {
         if ([403, 404].includes(error.statusCode)) continue;
         throw error;
       }
-      await createNotification(recipientId, 'REMINDER', row.title, 'Starts {time}', { eventId }, {
+      // The occurrence lets a tapped reminder open the day it is about, not
+      // the first date of a repeating series.
+      await createNotification(recipientId, 'REMINDER', row.title, 'Starts {time}', {
+        eventId,
+        occurrenceStartAt: row.occurrenceStartAt.toISOString(),
+        occurrenceOriginalStartAt: row.occurrenceOriginalStartAt.toISOString()
+      }, {
         time: (locale, recipient) => formatDateTime(locale, new Date(occurrenceStartAt), event.timeZone, !uses24Hour(recipient))
       });
     }

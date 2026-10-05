@@ -118,7 +118,14 @@ describe('persisted reminders and the worker', () => {
     expect(transport.mock.calls[0][0]).toMatchObject({
       tokens: ['isolated-test-device-token'],
       notification: { title: 'Two-minute event' },
-      data: { category: 'REMINDER', alarm: 'true' },
+      data: {
+        category: 'REMINDER',
+        alarm: 'true',
+        // What a tap needs to open this exact occurrence.
+        eventId: event._id.toString(),
+        occurrenceStartAt: startsAt.toISOString(),
+        occurrenceOriginalStartAt: startsAt.toISOString()
+      },
       android: { priority: 'high', notification: { channelId: 'aurox_alarms' } }
     });
   });
