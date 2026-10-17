@@ -14,6 +14,7 @@ const conversationSchema = new mongoose.Schema({
   calendarId: { type: mongoose.Schema.Types.ObjectId, ref: 'Calendar', required: true, index: true },
   title: { type: String, default: 'New chat', maxlength: 160 },
   messages: [messageSchema],
+  eventContextId: { type: mongoose.Schema.Types.ObjectId, ref: 'Event' },
   // Kept past the retention window on the owner's say-so. Free accounts
   // cannot set it, so their history always ages out.
   savedAt: Date,

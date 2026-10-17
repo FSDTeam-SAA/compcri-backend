@@ -130,6 +130,36 @@ describe('persisted reminders and the worker', () => {
     });
   });
 
+  it('saving or editing one event preserves reminders for other events and calendars', async () => {
+    const { user, calendar } = await owner();
+    const startsAt = new Date(Date.now() + 120000);
+    const first = (await createEvent(user._id, calendar._id, { title: 'First event', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC' })).event;
+    const second = (await createEvent(user._id, calendar._id, { title: 'Second event', startsAt: new Date(+startsAt + 7200000), endsAt: new Date(+startsAt + 10800000), timeZone: 'UTC' })).event;
+    const anotherUser = await models.User.create({ email: 'another-owner@example.com', contactCode: 'ANOTHER', revenueCatAppUserId: 'another' });
+    const anotherCalendar = await models.Calendar.create({ ownerId: anotherUser._id, timeZone: 'UTC' });
+    await createEvent(anotherUser._id, anotherCalendar._id, { title: 'Other calendar', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC' });
+    expect((await agenda.queryJobs({ name: 'send-event-reminder' })).total).toBe(3);
+    const { updateEvent } = await import('../services/event.service.js');
+    await updateEvent(user._id, second._id.toString(), { version: second.__v, title: 'Renamed second event' });
+    expect((await agenda.queryJobs({ name: 'send-event-reminder' })).total).toBe(3);
+    expect((await agenda.queryJobs({ name: 'send-event-reminder', data: { eventId: first._id.toString() } })).total).toBe(1);
+  });
+
+  it('keeps a due reminder through a startup refresh without adding duplicate schedules', async () => {
+    const { user, calendar } = await owner();
+    const startsAt = new Date(Date.now() + 120000);
+    const { event } = await createEvent(user._id, calendar._id, { title: 'Due reminder', startsAt, endsAt: new Date(+startsAt + 3600000), timeZone: 'UTC', reminderMinutes: [0, 1] });
+    await mongoose.connection.db.collection('agendaJobs').updateOne({ name: 'send-event-reminder', 'data.eventId': event._id.toString(), 'data.minutes': 1 }, { $set: { nextRunAt: new Date(Date.now() - 1000) } });
+    const { scheduleEventReminders } = await import('../jobs/reminders.js');
+    await scheduleEventReminders(event, { preserveDue: true });
+    const jobs = (await agenda.queryJobs({ name: 'send-event-reminder', data: { eventId: event._id.toString() } })).jobs;
+    expect(jobs).toHaveLength(2);
+    expect(jobs.find((job) => job.data.minutes === 1).nextRunAt < new Date()).toBe(true);
+    await agenda.start();
+    await vi.waitFor(() => expect(transport).toHaveBeenCalledOnce(), { timeout: 5000 });
+    expect(await models.Notification.countDocuments({ category: 'REMINDER' })).toBe(1);
+  });
+
   it('refreshes existing non-recurring future events with an event-time job after deployment', async () => {
     const { user, calendar } = await owner();
     const startsAt = new Date(Date.now() + 1800000);

@@ -17,14 +17,15 @@ export const aiToolDefinitions = [
   },
   {
     name: 'check_availability',
-    description: 'Decide whether the user is free at one specific time. Call it whenever they ask if they are free or available, whether something fits, or whether they can accept or book something at a given time, and before proposing a new or moved event. Its `free` field is the final answer: false means the time clashes with the listed conflicts. Give endsAt or durationMinutes; with neither, 30 minutes is assumed.',
+    description: 'Decide whether the user is free at one specific time. Call it whenever they ask if they are free or available, whether something fits, or whether they can accept or book something at a given time, and before proposing a new or moved event. When moving an existing event, identify it first and pass excludeEventId. Its `free` field is the final answer: false means the time clashes with the listed conflicts. Give endsAt or durationMinutes; with neither, 30 minutes is assumed.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         startsAt: { type: 'string', description: 'Start, e.g. 2026-10-02T09:05 in the calendar timezone, or with an offset.' },
         endsAt: { type: 'string' },
-        durationMinutes: { type: 'integer', minimum: 1, maximum: 1440 }
+        durationMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
+        excludeEventId: { type: 'string', description: 'ID of the existing event being rescheduled; omit for new bookings.' }
       },
       required: ['startsAt']
     }
@@ -161,7 +162,8 @@ export const aiToolSchemas = {
   check_availability: z.object({
     startsAt: iso,
     endsAt: iso.optional(),
-    durationMinutes: z.number().int().min(1).max(1440).optional()
+    durationMinutes: z.number().int().min(1).max(1440).optional(),
+    excludeEventId: z.string().regex(/^[a-f\d]{24}$/i).optional()
   }),
   find_availability: z.object({ from: iso, to: iso, durationMinutes: z.number().int().min(5).max(1440) }),
   list_contacts: z.object({}),

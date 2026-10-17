@@ -52,3 +52,14 @@ export const OPENAI_TTS_VOICES = [
   'marin',
   'cedar'
 ];
+
+// Keep legacy IDs valid for already-distributed builds, but synthesize only
+// these four voices, which also work with tts-1 and tts-1-hd.
+export const ASSISTANT_VOICES = ['echo', 'onyx', 'nova', 'shimmer'];
+export const resolveAssistantVoice = (voice) => {
+  if (ASSISTANT_VOICES.includes(voice)) return voice;
+  if (['ash', 'ballad', 'cedar'].includes(voice)) return 'onyx';
+  if (['fable', 'verse'].includes(voice)) return 'echo';
+  if (['sage', 'marin'].includes(voice)) return 'shimmer';
+  return 'nova';
+};

@@ -4,3 +4,6 @@ node_modules
 !.env.example
 artifacts/ai-benchmark/
 coverage/
+
+# Reusable generated voice samples (not source files)
+data/voice-previews/

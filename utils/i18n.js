@@ -5,6 +5,7 @@ import { LOCALES } from '../constants/enums.js';
 /// variable parts use `{name}` placeholders filled in by `translate`.
 const messages = {
   pt: {
+    'Past dates are view-only. Choose today or a future date.': 'Datas passadas são apenas para consulta. Escolha hoje ou uma data futura.',
     // Generic failures
     'Validation failed': 'Verifique os dados informados',
     'Something went wrong': 'Algo deu errado',
@@ -175,6 +176,7 @@ const messages = {
     'Your password reset code is {code}. It expires in 10 minutes.': 'Seu código para redefinir a senha é {code}. Ele expira em 10 minutos.'
   },
   es: {
+    'Past dates are view-only. Choose today or a future date.': 'Las fechas pasadas son solo de consulta. Elige hoy o una fecha futura.',
     'Validation failed': 'Revisa los datos introducidos',
     'Something went wrong': 'Algo salió mal',
     'Invalid resource identifier': 'Identificador no válido',

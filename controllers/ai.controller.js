@@ -5,6 +5,7 @@ import { requestLocale, translate } from '../utils/i18n.js';
 
 export const createConversation = catchAsync(async (req, res) => sendSuccess(res, await service.createConversation(req.user._id, req.body.calendarId, req.body.title), { status: 201 }));
 export const listConversations = catchAsync(async (req, res) => sendSuccess(res, await service.listConversations(req.user._id, req.query.search)));
+export const deleteAllConversations = catchAsync(async (req, res) => sendSuccess(res, await service.deleteAllConversations(req.user._id)));
 export const getConversation = catchAsync(async (req, res) => sendSuccess(res, await service.getConversation(req.user._id, req.params.id)));
 export const deleteConversation = catchAsync(async (req, res) => { await service.deleteConversation(req.user._id, req.params.id); sendSuccess(res, { deleted: true }); });
 export const setConversationSaved = catchAsync(async (req, res) => sendSuccess(res, await service.setConversationSaved(req.user._id, req.params.id, req.body.saved)));
@@ -74,16 +75,10 @@ const eventStream = (run) => async (req, res, next) => {
 /// `tools` for the calendar work behind it, `reset` to retract text the model
 /// is replacing, and `done` for the saved message and anything awaiting
 /// confirmation.
-export const streamMessage = eventStream(async (req, send) => {
-  const turn = await service.sendMessage(
-    req.user._id,
-    req.params.id,
-    req.body.content,
-    undefined,
-    { onEvent: send }
-  );
-  send({ type: 'done', message: turn.message, pendingActions: turn.pendingActions });
-});
+export const streamMessage = eventStream((req, send, cancelled) => service.streamTextMessage(
+  req.user._id, req.params.id, req.body.content,
+  { voice: req.body.voice, speak: req.body.speak, onEvent: send, isCancelled: cancelled }
+));
 
 /// A voice turn as it happens: the transcript as soon as it is known, the
 /// answer as it is written, then its speech in ordered pieces. Transcription
@@ -100,6 +95,9 @@ export const sendVoiceMessage = catchAsync(async (req, res) => sendSuccess(
 ));
 export const editMessage = catchAsync(async (req, res) => sendSuccess(res, await service.editMessage(req.user._id, req.params.id, req.params.messageId, req.body.content)));
 export const deleteMessage = catchAsync(async (req, res) => { await service.deleteMessage(req.user._id, req.params.id, req.params.messageId); sendSuccess(res, { deleted: true }); });
+export const messageSpeech = catchAsync(async (req, res) => {
+  sendSuccess(res, await service.messageSpeech(req.user._id, req.params.id, req.params.messageId, req.body.voice));
+});
 export const voicePreview = catchAsync(async (req, res) => {
   const speech = await service.voicePreview(req.user._id, req.params.voice);
   sendSuccess(res, {

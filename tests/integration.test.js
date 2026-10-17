@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { DateTime } from 'luxon';
@@ -46,6 +46,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // Fixed clock keeps scheduling fixtures valid as the calendar moves on.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-02-01T12:00:00Z'));
   await Promise.all(Object.values(mongoose.connection.collections).map((collection) => collection.deleteMany({})));
   const aiModule = await import('../services/ai.service.js');
   aiModule.resetAiProviderClientsForTests();
@@ -54,6 +57,8 @@ beforeEach(async () => {
     { type: 'PRIVACY', version: 'v1', locale: 'en', title: 'Privacy', content: 'Test privacy', active: true }
   ]);
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('foundation and authentication', () => {
   it('publishes health and OpenAPI documents', async () => {
@@ -67,7 +72,7 @@ describe('foundation and authentication', () => {
       '/users/me', '/users/me/password', '/users/me/notification-preferences', '/users/me/calendars', '/users/me/subscription-management', '/users/me/deletion',
       '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/conflicts','/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
-      '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
+      '/ai/quota', '/ai/voices/{voice}/preview', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/conversations/{id}/messages/{messageId}/speech', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
       '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password', '/admin/coupons', '/admin/coupons/stats', '/admin/coupons/{id}'
     ];
     expect(Object.keys(docs.body.paths).sort()).toEqual(documentedPaths.sort());
@@ -581,12 +586,42 @@ describe('network, subscriptions, notifications, and AI', () => {
     expect(reply.body.data.message.content).toBe('You have no events tomorrow.');
     expect(reply.body.data.message.providerMetadata).toMatchObject({ provider: 'openai', model: 'gpt-5.6-luna' });
     expect(reply.body.data.audio).toMatchObject({
-      available: true, encoding: 'base64', base64: 'SUQz', contentType: 'audio/mpeg', model: 'tts-1', voice: 'alloy'
+      available: true, encoding: 'base64', base64: 'SUQz', contentType: 'audio/mpeg', model: 'tts-1', voice: 'nova'
     });
     expect(transcribe.mock.calls[0][0]).toMatchObject({ model: 'gpt-transcribe', response_format: 'json' });
-    expect(createSpeech.mock.calls[0][0]).toMatchObject({ model: 'tts-1', voice: 'alloy', response_format: 'mp3' });
+    expect(createSpeech.mock.calls[0][0]).toMatchObject({ model: 'tts-1', voice: 'nova', response_format: 'mp3' });
     expect(createResponse.mock.calls[0][0].instructions).toContain('spoken interaction');
     expect((await models.AiUsage.findOne({ calendarId })).requestCount).toBe(1);
+  });
+
+  it('recreates missing answer speech without another AI turn, and protects other users history', async () => {
+    const user = await register('replay@example.com').expect(201);
+    const token = user.body.data.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    await models.User.updateOne({ _id: user.body.data.user._id }, { $set: { plan: 'PREMIUM', premiumUntil: new Date(Date.now() + 86400000) } });
+    const conversation = await models.Conversation.create({
+      userId: user.body.data.user._id, calendarId,
+      messages: [{ role: 'USER', content: 'Olá' }, { role: 'ASSISTANT', content: 'Olá! Como posso ajudar?' }]
+    });
+    const ai = await import('../services/ai.service.js');
+    const create = vi.fn(async () => ({ arrayBuffer: async () => Uint8Array.from([73, 68, 51]).buffer }));
+    ai.setAiProviderClientForTests('openai', { audio: { speech: { create } } });
+    const path = `/api/v1/ai/conversations/${conversation._id}/messages/${conversation.messages[1]._id}/speech`;
+    const response = await request(app).post(path).set(auth(token)).send({ voice: 'nova' }).expect(200);
+    expect(response.body.data.clips.length).toBeGreaterThan(0);
+    expect(response.body.data.clips[0]).toMatchObject({ base64: 'SUQz', contentType: 'audio/mpeg' });
+    expect(await models.AiUsage.countDocuments()).toBe(0);
+    expect(await models.PendingAiAction.countDocuments()).toBe(0);
+    const unchanged = await models.Conversation.findById(conversation._id);
+    expect(unchanged.messages).toHaveLength(2);
+    expect(unchanged.updatedAt).toEqual(conversation.updatedAt);
+    await request(app).post(`/api/v1/ai/conversations/${conversation._id}/messages/${conversation.messages[0]._id}/speech`).set(auth(token)).send({}).expect(404);
+    const other = await register('other-replay@example.com').expect(201);
+    const count = create.mock.calls.length;
+    await request(app).post(path).set(auth(other.body.data.accessToken)).send({}).expect(404);
+    await models.Conversation.deleteOne({ _id: conversation._id });
+    await request(app).post(path).set(auth(token)).send({}).expect(404);
+    expect(create).toHaveBeenCalledTimes(count);
   });
 
   it('streams a voice turn: transcript first, then the answer, then its speech piece by piece', async () => {
@@ -655,6 +690,25 @@ describe('network, subscriptions, notifications, and AI', () => {
     expect(muted.map((event) => event.type)).toEqual(['transcript', 'delta', 'delta', 'done']);
     expect(createSpeech).toHaveBeenCalledTimes(2);
     expect((await models.AiUsage.findOne({ calendarId })).requestCount).toBe(2);
+    // Typing inside the same hands-free call also returns speech, with no
+    // transcription request and no second conversation.
+    aiModule.setAiProviderForTests('openai');
+    const sendText = (fields) => request(app)
+      .post(`/api/v1/ai/conversations/${conversation.body.data._id}/messages/stream`)
+      .set(auth(token)).send(fields).buffer(true)
+      .parse((res, callback) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => callback(null, body));
+      }).expect(200);
+    const typed = eventsOf(await sendText({ content: 'Tell me again', speak: true, voice: 'nova' }));
+    expect(typed.map((event) => event.type)).toEqual(['delta', 'delta', 'done', 'audio', 'audio']);
+    expect(typed[2].message.content).toBe(answer.join(''));
+    expect(createSpeech).toHaveBeenCalledTimes(4);
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    const quietText = eventsOf(await sendText({ content: 'Thanks', speak: false }));
+    expect(quietText.map((event) => event.type)).toEqual(['delta', 'delta', 'done']);
+    expect(createSpeech).toHaveBeenCalledTimes(4);
   });
 
   it('splits a streaming reply into exactly the speech pieces the finished reply produces', async () => {
@@ -1185,25 +1239,77 @@ describe('assistant availability answers (free/busy decided by the server)', () 
     expect(proposal.conflicts).toEqual([expect.objectContaining({ title: 'Client call' })]);
   });
 
-  it('stops a chat-made event at a time that has already passed, and saves it only when asked', async () => {
+  it('locks previous dates even when the assistant attempts to save a past event', async () => {
     const owner = await premiumUser('past-time@example.com');
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const event = { title: 'Dinner', startsAt: `${yesterday}T21:00`, endsAt: `${yesterday}T22:00`, timeZone: ZONE, reminderMinutes: [10] };
-    let toolOutputs = await scriptModel([{ id: 'past', name: 'propose_create_event', args: event }]);
+    const yesterday = DateTime.now().setZone(ZONE).minus({ days: 1 }).toISODate();
+    const event = { title: 'Dinner', startsAt: `${yesterday}T21:00`, endsAt: `${yesterday}T22:00`, timeZone: ZONE };
+    for (const savePastEvent of [false, true]) {
+      const toolOutputs = await scriptModel([{ id: 'past', name: 'propose_create_event', args: { ...event, savePastEvent } }]);
+      const reply = await ask(owner, 'Save it as a past event');
+      expect(toolOutputs()[0].error.code).toBe('PAST_DATE_LOCKED');
+      expect(reply.body.data.pendingActions).toEqual([]);
+    }
+    expect(await models.Event.countDocuments({ calendarId: owner.calendarId })).toBe(0);
+  });
 
-    let reply = await ask(owner, 'Dinner at 9pm');
-    const [warning] = toolOutputs();
-    expect(warning.passed).toBe(true);
-    expect(warning.summary).toMatch(/^TIME ALREADY PASSED: .*9:00 PM–10:00 PM/);
-    expect(warning.summary).toMatch(/Never move it to tomorrow/);
+  it('reschedules the existing overnight event by ID without a self-conflict or duplicate', async () => {
+    const owner = await premiumUser('overnight-change@example.com');
+    const original = await addEvent(owner.calendarId, owner.userId, 'test', '23:00', '23:30');
+    const startsAt = `${tomorrow()}T22:00`;
+    const endsAt = `${DateTime.fromISO(tomorrow()).plus({ days: 1 }).toISODate()}T00:30`;
+    const outputs = await scriptModel([
+      { id: 'check', name: 'check_availability', args: { startsAt, endsAt, excludeEventId: original._id.toString() } },
+      { id: 'edit', name: 'propose_update_event', args: { eventId: original._id.toString(), version: 0, startsAt, endsAt } }
+    ]);
+    const reply = await ask(owner, 'Change the test event to 10, sorry, 10 PM until 12:30 AM the following day.');
+    expect(outputs()[0]).toMatchObject({ free: true, conflicts: [] });
+    const [action] = reply.body.data.pendingActions;
+    expect(action.type).toBe('UPDATE_EVENT');
+    expect(action.conflictWarnings).toEqual([]);
+    await request(app).post(`/api/v1/ai/actions/${action._id}/confirm`).set(auth(owner.token)).send({}).expect(200);
+    expect(await models.Event.countDocuments({ calendarId: owner.calendarId })).toBe(1);
+    const updated = await models.Event.findById(original._id);
+    expect(updated.startsAt).toEqual(at('22:00'));
+    expect(DateTime.fromJSDate(updated.endsAt, { zone: ZONE }).toISODate()).not.toBe(tomorrow());
+    const conversation = await models.Conversation.findById(action.conversationId);
+    expect(conversation.eventContextId.toString()).toBe(original._id.toString());
+  });
+
+  it('rejects an accidental create tool for an imperfect request to move an existing event', async () => {
+    const owner = await premiumUser('edit-not-create@example.com');
+    await addEvent(owner.calendarId, owner.userId, 'test', '23:00', '23:30');
+    const outputs = await scriptModel([{ id: 'wrong-create', name: 'propose_create_event', args: {
+      title: 'test', startsAt: `${tomorrow()}T22:00`, endsAt: `${tomorrow()}T23:00`, timeZone: ZONE
+    } }]);
+    const reply = await ask(owner, 'Can you move this to Friday? From 10 to 11, no, 11 to 9.');
+    expect(outputs()[0].error.code).toBe('EVENT_TARGET_REQUIRED');
     expect(reply.body.data.pendingActions).toEqual([]);
+    expect(await models.Event.countDocuments({ calendarId: owner.calendarId })).toBe(1);
+  });
 
-    toolOutputs = await scriptModel([{ id: 'past-ok', name: 'propose_create_event', args: { ...event, savePastEvent: true } }]);
-    reply = await ask(owner, 'Save it as a past event');
-    const [staged] = reply.body.data.pendingActions;
-    expect(staged.type).toBe('CREATE_EVENT');
-    expect(staged.payload.reminderMinutes).toEqual([]);
-    expect(staged.payload.savePastEvent).toBeUndefined();
+  it('asks for the target when multiple events match an unnamed correction', async () => {
+    const owner = await premiumUser('ambiguous-target@example.com');
+    const first = await addEvent(owner.calendarId, owner.userId, 'First meeting', '09:00', '10:00');
+    await addEvent(owner.calendarId, owner.userId, 'Other meeting', '10:00', '11:00');
+    const outputs = await scriptModel([
+      { id: 'list', name: 'list_events', args: { from: `${tomorrow()}T00:00`, to: `${tomorrow()}T23:59` } },
+      { id: 'edit', name: 'propose_update_event', args: { eventId: first._id.toString(), version: 0, startsAt: `${tomorrow()}T12:00` } }
+    ]);
+    const reply = await ask(owner, 'Move that one to noon, actually to twelve.');
+    expect(outputs()[1].error.code).toBe('EVENT_SELECTION_REQUIRED');
+    expect(reply.body.data.pendingActions).toEqual([]);
+  });
+
+  it('still reports other events and excludes the target from alternative slots', async () => {
+    const owner = await premiumUser('other-conflict@example.com');
+    const target = await addEvent(owner.calendarId, owner.userId, 'test', '09:00', '10:00');
+    await addEvent(owner.calendarId, owner.userId, 'Other event', '09:30', '10:30');
+    const outputs = await scriptModel([{ id: 'check', name: 'check_availability', args: {
+      startsAt: `${tomorrow()}T09:00`, endsAt: `${tomorrow()}T10:00`, excludeEventId: target._id.toString()
+    } }]);
+    await ask(owner, 'Move test to nine tomorrow.');
+    expect(outputs()[0].conflicts.map((item) => item.title)).toEqual(['Other event']);
+    expect(outputs()[0].alternatives.length).toBeGreaterThan(0);
   });
 
   it('writes times for the assistant in the format the user chose', async () => {
@@ -1374,4 +1480,114 @@ describe('admin coupons', () => {
   await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({avatarMediaId:asset._id.toString()})).expect(400);
   await request(app).get('/api/v1/admin/coupons/not-an-id').set(headers).expect(422);
  });
+});
+
+describe('history deletion and date locks', () => {
+  it('permanently deletes only the signed-in user’s history and proposals, including saved chats', async () => {
+    const alice = (await register('delete-history@example.com').expect(201)).body.data;
+    const bob = (await register('keep-history@example.com').expect(201)).body.data;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(alice.accessToken))).body.data.primaryCalendar._id;
+    const own = await models.Conversation.create({ userId: alice.user._id, calendarId, savedAt: new Date(), messages: [{ role: 'USER', content: 'Private transcript' }] });
+    const other = await models.Conversation.create({ userId: bob.user._id, calendarId, title: 'Keep me' });
+    const pending = await models.PendingAiAction.create({ conversationId: own._id, requestedById: alice.user._id, calendarId, type: 'CREATE_EVENT', payload: { title: 'Not saved' }, expiresAt: new Date(Date.now() + 600000) });
+    const event = await models.Event.create({ calendarId, createdById: alice.user._id, title: 'Keep calendar event', startsAt: new Date(Date.now() + 600000), endsAt: new Date(Date.now() + 1200000), timeZone: 'UTC' });
+    await request(app).delete('/api/v1/ai/conversations').expect(401);
+    const deleted = await request(app).delete('/api/v1/ai/conversations').set(auth(alice.accessToken)).expect(200);
+    expect(deleted.body.data.deleted).toBe(1);
+    expect(await models.Conversation.findById(own._id)).toBeNull();
+    expect(await models.PendingAiAction.findById(pending._id)).toBeNull();
+    expect(await models.Conversation.findById(other._id)).not.toBeNull();
+    expect(await models.Event.findById(event._id)).not.toBeNull();
+    await request(app).post(`/api/v1/ai/actions/${pending._id}/confirm`).set(auth(alice.accessToken)).send({}).expect(404);
+    await request(app).delete('/api/v1/ai/conversations').set(auth(alice.accessToken)).expect(200);
+  });
+
+  it('conversation history expires Free at 7 days and Pro at 30, permanently removing proposals but preserving saved chats', async () => {
+    const free = (await register('history-free@example.com').expect(201)).body.data;
+    const pro = (await register('history-pro@example.com').expect(201)).body.data;
+    await models.User.updateOne({ _id: pro.user._id }, { $set: { plan: 'PREMIUM' } });
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(free.accessToken))).body.data.primaryCalendar._id;
+    const atAge = async (userId, days, extra = {}) => {
+      const item = await models.Conversation.create({ userId, calendarId, messages: [{ role: 'USER', content: 'Private history' }], ...extra });
+      await models.Conversation.updateOne({ _id: item._id }, { $set: { updatedAt: new Date(Date.now() - days * 86400000) } }, { timestamps: false });
+      return models.Conversation.findById(item._id);
+    };
+    const freeDue = await atAge(free.user._id, 7);
+    const freeRecent = await atAge(free.user._id, 6);
+    const proDue = await atAge(pro.user._id, 30);
+    const proRecent = await atAge(pro.user._id, 29);
+    const saved = await atAge(pro.user._id, 60, { savedAt: new Date() });
+    const legacy = await atAge(free.user._id, 40, { deletedAt: new Date(), savedAt: new Date() });
+    const action = await models.PendingAiAction.create({ conversationId: freeDue._id, requestedById: free.user._id, calendarId, type: 'CREATE_EVENT', payload: { title: 'Private proposal' }, expiresAt: new Date(Date.now() + 600000) });
+    const { expireConversations } = await import('../services/conversationHistory.service.js');
+    expect(await expireConversations({ batchSize: 2 })).toEqual({ deleted: 3 });
+    for (const item of [freeDue, proDue, legacy]) expect(await models.Conversation.findById(item._id)).toBeNull();
+    for (const item of [freeRecent, proRecent, saved]) expect(await models.Conversation.findById(item._id)).not.toBeNull();
+    expect(await models.PendingAiAction.findById(action._id)).toBeNull();
+  });
+
+  it('conversation history scans beyond ineligible Pro batches and supplies expiry metadata', async () => {
+    const free = (await register('batch-free@example.com').expect(201)).body.data;
+    const pro = (await register('batch-pro@example.com').expect(201)).body.data;
+    await models.User.updateOne({ _id: pro.user._id }, { $set: { plan: 'PREMIUM' } });
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(free.accessToken))).body.data.primaryCalendar._id;
+    for (let i = 0; i < 3; i++) await models.Conversation.create({ userId: pro.user._id, calendarId });
+    await models.Conversation.updateMany({ userId: pro.user._id }, { $set: { updatedAt: new Date(Date.now() - 10 * 86400000) } }, { timestamps: false });
+    const due = await models.Conversation.create({ userId: free.user._id, calendarId });
+    await models.Conversation.updateOne({ _id: due._id }, { $set: { updatedAt: new Date(Date.now() - 8 * 86400000) } }, { timestamps: false });
+    const { expireConversations } = await import('../services/conversationHistory.service.js');
+    expect(await expireConversations({ batchSize: 2 })).toEqual({ deleted: 1 });
+    expect(await models.Conversation.findById(due._id)).toBeNull();
+    const listed = await request(app).get('/api/v1/ai/conversations').set(auth(pro.accessToken)).expect(200);
+    expect(listed.body.data).toHaveLength(3);
+    expect(listed.body.data[0].historyRetentionDays).toBe(30);
+    expect(listed.body.data[0].expiresAt).toBe(new Date(Date.now() + 20 * 86400000).toISOString());
+    expect(listed.body.data[0].messages).toBeUndefined();
+  });
+
+  it('conversation history allows Pro bookmarks and account-owned individual deletion', async () => {
+    const free = (await register('bookmark-free@example.com').expect(201)).body.data;
+    const pro = (await register('bookmark-pro@example.com').expect(201)).body.data;
+    await models.User.updateOne({ _id: pro.user._id }, { $set: { plan: 'PREMIUM' } });
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(pro.accessToken))).body.data.primaryCalendar._id;
+    const own = await models.Conversation.create({ userId: pro.user._id, calendarId, title: 'Keep my ideas' });
+    const freeChat = await models.Conversation.create({ userId: free.user._id, calendarId });
+    await models.Conversation.updateOne({ _id: own._id }, { $set: { updatedAt: new Date(Date.now() - 29 * 86400000) } }, { timestamps: false });
+    await request(app).patch(`/api/v1/ai/conversations/${freeChat._id}/saved`).set(auth(free.accessToken)).send({ saved: true }).expect(402);
+    await request(app).patch(`/api/v1/ai/conversations/${own._id}/saved`).set(auth(pro.accessToken)).send({ saved: true }).expect(200);
+    const list = await request(app).get('/api/v1/ai/conversations').set(auth(pro.accessToken)).expect(200);
+    expect(list.body.data[0].savedAt).toBeTruthy();
+    expect(list.body.data[0].expiresAt).toBeNull();
+    await request(app).delete(`/api/v1/ai/conversations/${own._id}`).set(auth(free.accessToken)).expect(404);
+    await request(app).patch(`/api/v1/ai/conversations/${own._id}/saved`).set(auth(pro.accessToken)).send({ saved: false }).expect(200);
+    const unsaved = await request(app).get('/api/v1/ai/conversations').set(auth(pro.accessToken)).expect(200);
+    expect(unsaved.body.data[0].expiresAt).toBe(new Date(Date.now() + 86400000).toISOString());
+    const pending = await models.PendingAiAction.create({ conversationId: own._id, requestedById: pro.user._id, calendarId, type: 'CREATE_EVENT', payload: {}, expiresAt: new Date(Date.now() + 600000) });
+    await request(app).delete(`/api/v1/ai/conversations/${own._id}`).set(auth(pro.accessToken)).expect(200);
+    expect(await models.Conversation.findById(own._id)).toBeNull();
+    expect(await models.PendingAiAction.findById(pending._id)).toBeNull();
+    expect(await models.Conversation.findById(freeChat._id)).not.toBeNull();
+    const freeList = await request(app).get('/api/v1/ai/conversations').set(auth(free.accessToken)).expect(200);
+    expect(freeList.body.data[0].historyRetentionDays).toBe(7);
+  });
+
+  it('keeps yesterday visible while rejecting create, edit, move and delete', async () => {
+    const me = (await register('date-lock@example.com').expect(201)).body.data;
+    const token = me.accessToken;
+    const calendarId = (await request(app).get('/api/v1/users/me').set(auth(token))).body.data.primaryCalendar._id;
+    const start = DateTime.now().minus({ days: 1 }).startOf('day').plus({ hours: 9 }).toJSDate();
+    const end = new Date(+start + 3600000);
+    const old = await models.Event.create({ calendarId, createdById: me.user._id, title: 'Past event', startsAt: start, endsAt: end, timeZone: 'UTC' });
+    const input = { title: 'Accidental past booking', startsAt: start.toISOString(), endsAt: end.toISOString(), timeZone: 'UTC' };
+    const rejected = await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send(input).expect(422);
+    expect(rejected.body.error.code).toBe('PAST_DATE_LOCKED');
+    await request(app).patch(`/api/v1/events/${old._id}`).set(auth(token)).send({ version: 0, title: 'Changed' }).expect(422);
+    await request(app).patch(`/api/v1/events/${old._id}`).set(auth(token)).send({ version: 0, startsAt: new Date(Date.now() + 3600000).toISOString() }).expect(422);
+    await request(app).delete(`/api/v1/events/${old._id}`).set(auth(token)).query({ version: 0 }).expect(422);
+    const listed = await request(app).get(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).query({ from: new Date(+start - 3600000).toISOString(), to: new Date(+end + 3600000).toISOString() }).expect(200);
+    expect(listed.body.data[0].title).toBe('Past event');
+    // Earlier today is a separate time warning; the entire current day is never locked.
+    const today = DateTime.now().startOf('day').plus({ hours: 9 });
+    await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({ ...input, startsAt: today.toISO(), endsAt: today.plus({ hours: 1 }).toISO() }).expect(201);
+  });
 });

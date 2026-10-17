@@ -14,6 +14,7 @@ import { createNotification } from './notification.service.js';
 import { scheduleEventReminders } from '../jobs/reminders.js';
 import { assertValidRecurrence, recurrenceBetween } from '../utils/recurrence.js';
 import { expandEvent, eventRangeQuery } from '../utils/eventOccurrences.js';
+import { assertEditableDate } from '../utils/pastDates.js';
 import { withEventTimeReminder } from '../utils/reminders.js';
 export { expandEvent } from '../utils/eventOccurrences.js';
 
@@ -216,10 +217,16 @@ const withinWorkingHours = (calendar, startsAt, endsAt) => {
 /// (the rule saves use, so back-to-back is not a clash) or, on the user's own
 /// calendar, a shared event they accepted does. A delegate who may only see
 /// their own events still learns the time is taken, just not by what.
-export const checkTime = async (userId, calendarId, startsAt, endsAt) => {
+export const checkTime = async (userId, calendarId, startsAt, endsAt, excludeEventId) => {
   validateRange(startsAt, endsAt);
   const access = await getCalendarAccess(userId, calendarId);
-  const events = await candidateEvents(calendarId, startsAt, endsAt);
+  if (excludeEventId) {
+    const target = await getEventAccess(userId, excludeEventId);
+    if (target.event.calendarId.toString() !== calendarId.toString() || !target.canEdit) {
+      throw new ApiError(403, 'Editing this event is not permitted', 'EVENT_EDIT_FORBIDDEN');
+    }
+  }
+  const events = await candidateEvents(calendarId, startsAt, endsAt, excludeEventId);
   const conflicts = events.flatMap((event) => {
     const visible = access.capabilities.view !== 'OWN' || event.createdById.toString() === userId.toString();
     return expandEvent(event, startsAt, endsAt).map((occurrence) => ({
@@ -232,7 +239,7 @@ export const checkTime = async (userId, calendarId, startsAt, endsAt) => {
   if (access.isOwner) {
     const shared = await listSharedEvents(userId, startsAt, endsAt);
     for (const occurrence of shared) {
-      if (occurrence.rsvpStatus !== 'ACCEPTED') continue;
+      if (occurrence.rsvpStatus !== 'ACCEPTED' || occurrence._id.toString() === excludeEventId?.toString()) continue;
       conflicts.push({
         eventId: occurrence._id,
         title: occurrence.title,
@@ -246,7 +253,7 @@ export const checkTime = async (userId, calendarId, startsAt, endsAt) => {
   return {
     free: conflicts.length === 0,
     conflicts,
-    alternatives: await suggestAlternatives(access.calendar, calendarId, startsAt, endsAt, conflicts),
+    alternatives: await suggestAlternatives(access.calendar, calendarId, startsAt, endsAt, conflicts, excludeEventId),
     withinWorkingHours: withinWorkingHours(access.calendar, startsAt, endsAt)
   };
 };
@@ -340,6 +347,7 @@ export const createEvent = async (userId, calendarId, input) => {
   }
   const startsAt = new Date(input.startsAt);
   const endsAt = new Date(input.endsAt);
+  assertEditableDate(startsAt, access.calendar.timeZone);
   assertValidRecurrence(input.recurrenceRrule, startsAt, input.timeZone);
   await assertQuota(access.calendar, startsAt, input.recurrenceRrule);
   const premium = await isPremiumCalendar(access.calendar);
@@ -377,6 +385,8 @@ export const updateEvent = async (userId, eventId, input) => {
   const endsAt = input.endsAt ? new Date(input.endsAt) : access.event.endsAt;
   if (endsAt <= startsAt) throw new ApiError(422, 'Event end must be after its start', 'INVALID_EVENT_RANGE');
   const calendar = access.calendarAccess?.calendar || await Calendar.findById(access.event.calendarId);
+  if (!access.event.recurrenceRrule) assertEditableDate(access.event.startsAt, calendar.timeZone);
+  if (input.startsAt !== undefined) assertEditableDate(startsAt, calendar.timeZone);
   const recurrenceRrule = input.recurrenceRrule !== undefined ? input.recurrenceRrule : access.event.recurrenceRrule;
   assertValidRecurrence(recurrenceRrule, startsAt, input.timeZone || access.event.timeZone);
   if (input.startsAt !== undefined || input.recurrenceRrule !== undefined) {
@@ -439,8 +449,11 @@ export const setRecurrenceException = async (userId, eventId, input) => {
     overrides.reminderMinutes = withEventTimeReminder(input.overrides.reminderMinutes);
   }
   const oldStart = oldOverrides.startsAt ? new Date(oldOverrides.startsAt) : originalStartAt;
+  const calendarZone = access.calendarAccess?.calendar?.timeZone || access.event.timeZone;
+  assertEditableDate(oldStart, calendarZone);
   const oldEnd = oldOverrides.endsAt ? new Date(oldOverrides.endsAt) : new Date(oldStart.getTime() + durationMs(access.event));
   const startsAt = overrides.startsAt ? new Date(overrides.startsAt) : originalStartAt;
+  if (!input.cancelled) assertEditableDate(startsAt, calendarZone);
   // Moving only the start carries the existing duration. A title-only edit
   // keeps the earlier time override instead of reverting to the series.
   const endsAt = input.overrides?.startsAt && !input.overrides.endsAt
@@ -469,6 +482,7 @@ export const setRecurrenceException = async (userId, eventId, input) => {
 
 export const deleteEvent = async (userId, eventId, version) => {
   const access = await getEventAccess(userId, eventId);
+  if (!access.event.recurrenceRrule) assertEditableDate(access.event.startsAt, access.calendarAccess?.calendar?.timeZone || access.event.timeZone);
   if (!access.canDelete) throw new ApiError(403, 'Deleting this event is not permitted', 'EVENT_DELETE_FORBIDDEN');
   if (access.event.__v !== Number(version)) throw new ApiError(409, 'Event has changed; refresh and retry', 'EVENT_VERSION_CONFLICT');
   access.event.status = 'CANCELLED';
@@ -480,6 +494,7 @@ export const deleteEvent = async (userId, eventId, version) => {
 
 export const setCompleted = async (userId, eventId, completed, version) => {
   const access = await getEventAccess(userId, eventId);
+  if (!access.event.recurrenceRrule) assertEditableDate(access.event.startsAt, access.calendarAccess?.calendar?.timeZone || access.event.timeZone);
   if (!access.canEdit) throw new ApiError(403, 'Editing this event is not permitted', 'EVENT_EDIT_FORBIDDEN');
   if (access.event.__v !== version) throw new ApiError(409, 'Event has changed; refresh and retry', 'EVENT_VERSION_CONFLICT');
   access.event.completedAt = completed ? new Date() : null;

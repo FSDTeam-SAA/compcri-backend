@@ -21,7 +21,7 @@ describe('event reminder scheduling', () => {
   });
   it('always schedules event time, with an additional five-minute advance reminder', async () => {
     await scheduleEventReminders(event());
-    expect(queue.cancel).toHaveBeenCalledWith({ name: 'send-event-reminder', 'data.eventId': 'event-id' });
+    expect(queue.cancel).toHaveBeenCalledWith({ name: 'send-event-reminder', data: { eventId: 'event-id' } });
     expect(queue.enqueue).toHaveBeenCalledTimes(2);
     expect(queue.enqueue).toHaveBeenCalledWith('send-event-reminder', job(0), new Date('2030-10-03T12:10:00Z'));
     expect(queue.enqueue).toHaveBeenCalledWith('send-event-reminder', job(5), new Date('2030-10-03T12:05:00Z'));

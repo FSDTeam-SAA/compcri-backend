@@ -99,11 +99,28 @@ export const openapi = {
     '/groups/{id}/leave': { post: operation('Leave group', { parameters: [id('id')] }) },
     '/group-invitations': { get: operation('List pending group invitations') },
     '/group-invitations/{id}': { put: operation('Accept or reject group invitation', { parameters: [id('id')] }) },
+    '/ai/voices/{voice}/preview': { get: operation('Get a saved localized MP3 preview. Available voices: echo, onyx, nova, shimmer; legacy selections map to a supported voice.', { parameters: [{ name: 'voice', in: 'path', required: true, schema: { type: 'string', enum: OPENAI_TTS_VOICES } }] }) },
     '/ai/quota': { get: operation('Get owner-calendar AI quota') },
-    '/ai/conversations': { get: operation('List AI conversations'), post: operation('Create AI conversation') },
+    '/ai/conversations': { get: operation('List AI conversations'), post: operation('Create AI conversation'), delete: operation('Permanently delete all of your AI history, saved chats and pending actions') },
     '/ai/conversations/{id}': { get: operation('Get AI conversation', { parameters: [id('id')] }), delete: operation('Delete AI conversation', { parameters: [id('id')] }) },
     '/ai/conversations/{id}/messages': { post: operation('Send text message to the AI assistant', { parameters: [id('id')] }) },
-    '/ai/conversations/{id}/messages/stream': { post: operation('Send text message and stream the reply as server-sent events', { parameters: [id('id')] }) },
+    '/ai/conversations/{id}/messages/stream': {
+      post: operation('Stream a text reply and optional MP3 speech as server-sent events', {
+        parameters: [id('id')],
+        requestContent: {
+          'application/json': {
+            schema: {
+              type: 'object', required: ['content'],
+              properties: {
+                content: { type: 'string' },
+                speak: { type: 'boolean', default: false },
+                voice: { type: 'string', enum: OPENAI_TTS_VOICES }
+              }
+            }
+          }
+        }
+      })
+    },
     '/ai/conversations/{id}/voice-messages': {
       post: operation('Send audio and receive a transcribed AI reply with MP3 speech', {
         parameters: [id('id')],
@@ -140,6 +157,7 @@ export const openapi = {
       })
     },
     '/ai/conversations/{id}/messages/{messageId}': { patch: operation('Edit latest user message and regenerate', { parameters: [id('id'), id('messageId')] }), delete: operation('Delete conversation message', { parameters: [id('id'), id('messageId')] }) },
+    '/ai/conversations/{id}/messages/{messageId}/speech': { post: operation('Replay a saved assistant answer without a new AI turn', { parameters: [id('id'), id('messageId')], requestBody: { type: 'object', properties: { voice: { type: 'string', enum: OPENAI_TTS_VOICES } } } }) },
     '/ai/actions/{id}/confirm': { post: operation('Confirm a pending AI calendar mutation', { parameters: [id('id')] }) },
     '/ai/actions/{id}/reject': { post: operation('Reject a pending AI calendar mutation', { parameters: [id('id')] }) },
     '/notifications': { get: operation('List notification inbox') },

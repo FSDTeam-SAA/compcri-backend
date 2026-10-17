@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { resolveAssistantVoice } from '../../constants/enums.js';
 import { toFile } from 'openai';
 import { StatusCodes } from 'http-status-codes';
 import { env } from '../../config/env.js';
@@ -168,10 +169,10 @@ export const createSpeechPipeline = ({ voice, isCancelled = () => false } = {}) 
 
 export const synthesizeSpeech = async (input, requestedVoice) => {
   const prepared = speechText(input);
-  const voice = requestedVoice || env.OPENAI_TTS_VOICE;
+  const voice = resolveAssistantVoice(requestedVoice || env.OPENAI_TTS_VOICE);
   try {
     const client = getAiProviderClient('openai');
-    const operation = (async () => {
+    const generate = async () => {
       const response = await client.audio.speech.create({
         model: env.OPENAI_TTS_MODEL,
         voice,
@@ -179,6 +180,18 @@ export const synthesizeSpeech = async (input, requestedVoice) => {
         response_format: 'mp3'
       });
       return Buffer.from(await response.arrayBuffer());
+    };
+    // A transient synthesis failure must not turn a delivered answer into a
+    // permanently silent reply. Retry only speech, never the calendar turn.
+    const operation = (async () => {
+      try {
+        return await generate();
+      } catch (error) {
+        const status = error?.status || error?.statusCode;
+        if (![502, 503, 504].includes(status) && error?.name !== 'APIConnectionError') throw error;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return generate();
+      }
     })();
     const buffer = await withTimeout(operation, env.AI_PROVIDER_TIMEOUT_MS, 'openai');
     if (!buffer.length) throw new AiProviderError('OpenAI returned empty speech audio', { category: 'invalid_response', provider: 'openai' });

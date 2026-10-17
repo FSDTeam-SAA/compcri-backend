@@ -12,6 +12,7 @@ router.use(authenticate);
 router.get('/quota', validate({ query: z.object({ calendarId: objectId }) }), controller.quota);
 router.get('/voices/:voice/preview', validate({ params: z.object({ voice: z.string().trim().min(1).max(40) }) }), controller.voicePreview);
 router.get('/conversations', validate({ query: z.object({ search: z.string().trim().max(100).optional() }) }), controller.listConversations);
+router.delete('/conversations', controller.deleteAllConversations);
 router.post('/conversations', validate({ body: schemas.conversationBody }), controller.createConversation);
 router.get('/conversations/:id', validate({ params: schemas.conversationParams }), controller.getConversation);
 router.delete('/conversations/:id', validate({ params: schemas.conversationParams }), controller.deleteConversation);
@@ -31,6 +32,7 @@ router.post(
   controller.streamVoiceMessage
 );
 router.patch('/conversations/:id/messages/:messageId', validate({ params: schemas.messageParams, body: schemas.messageBody }), controller.editMessage);
+router.post('/conversations/:id/messages/:messageId/speech', validate({ params: schemas.messageParams, body: schemas.voiceMessageBody }), controller.messageSpeech);
 router.delete('/conversations/:id/messages/:messageId', validate({ params: schemas.messageParams }), controller.deleteMessage);
 router.post('/actions/:id/confirm', validate({ params: schemas.actionParams, body: schemas.confirmActionBody }), controller.confirmAction);
 router.post('/actions/:id/reject', validate({ params: schemas.actionParams }), controller.rejectAction);

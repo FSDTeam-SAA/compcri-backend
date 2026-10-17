@@ -75,11 +75,20 @@ Notifications remain enabled when alarm sound is off. Sound follows the user's *
 
 After deploying changes, restart both the API and the Agenda worker (`npm run worker`), with `DISABLE_JOBS=false`. The API saves jobs; the worker sends the notifications. Worker startup refreshes reminders for existing future events. Push delivery is asynchronous, so device receipt may be shortly after the scheduled time.
 
+## Conversation history
+
+Free accounts retain inactive conversations for 7 days; Pro accounts retain them for 30 days. Configure these windows with `CHAT_RETENTION_DAYS_FREE` and `CHAT_RETENTION_DAYS_PREMIUM`. Pro users can bookmark conversations to keep them until explicitly deleted. Bookmark changes preserve the last-message timestamp. Conversation summaries include `historyRetentionDays` and `expiresAt` (`null` for saved conversations).
+
+`DELETE /api/v1/ai/conversations/{id}` and `DELETE /api/v1/ai/conversations` permanently remove the signed-in user's conversation(s), transcripts, and associated AI proposals in a transaction. Calendar events remain unchanged. The Agenda `expire-conversations` job performs the same physical cleanup for expired history every six hours, including legacy soft-deleted records. Run the worker with `DISABLE_JOBS=false`; deploying only the API does not run automatic cleanup.
+
 ## AI providers and benchmark
 
 Set `AI_PROVIDER=gemini` or `AI_PROVIDER=openai` to choose the first provider used for each text assistant turn. The cost-sensitive defaults use OpenAI `gpt-5.6-luna` with low reasoning effort; Gemini remains the fallback provider. Changing the provider requires restarting the API process.
 
 Voice messages use a chained, turn-based pipeline: `gpt-transcribe` converts the uploaded audio to text, `gpt-5.6-luna` processes that text through the normal calendar assistant, and `tts-1` generates the MP3 reply. Send `multipart/form-data` with an `audio` file and optional `voice` to `POST /api/v1/ai/conversations/{id}/voice-messages`. The JSON response contains the transcript, normal assistant message and pending actions, plus base64-encoded MP3 data under `audio.base64`. The endpoint accepts FLAC, MP3, MP4, M4A, OGG, WAV, and WEBM up to `OPENAI_VOICE_MAX_FILE_MB`.
+
+
+The voice picker offers Echo and Onyx (male), Nova and Shimmer (female). Older builds may still send retired voice IDs; the backend maps those IDs to these supported voices before synthesis, including when using `tts-1`. Voice previews use a fixed greeting in the account's English, Portuguese, or Spanish language. They are saved as MP3s under `VOICE_PREVIEW_CACHE_DIR` (default `data/voice-previews`), reused across accounts and restarts, and do not consume an AI turn. Preserve this directory across releases and ensure the API process can write it. Simultaneous first requests share one synthesis request.
 
 Configure the voice pipeline with `OPENAI_TRANSCRIBE_MODEL`, `OPENAI_TTS_MODEL`, `OPENAI_TTS_VOICE`, and `OPENAI_VOICE_MAX_FILE_MB`. A voice turn consumes the same daily quota as a text turn. If speech generation fails after the assistant turn succeeds, the response still contains the text reply with `audio.available=false`, preventing a retry from duplicating a calendar action.
 
