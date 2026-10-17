@@ -9,9 +9,12 @@ import { loginSchema } from '../schemas/auth.schemas.js';
 import { changePasswordSchema } from '../schemas/user.schemas.js';
 import * as schemas from '../schemas/admin.schemas.js';
 
+import couponRoutes from './coupon.routes.js';
+
 const router = Router();
 router.post('/auth/login', authLimiter, validate({ body: loginSchema }), adminLogin);
 router.use(authenticate, authorize('ADMIN'));
+router.use('/coupons', couponRoutes);
 router.get('/dashboard', validate({ query: z.object({ period: z.enum(['week', 'month', 'year']).default('month') }) }), controller.dashboard);
 router.get('/users', validate({ query: schemas.usersQuery }), controller.users);
 router.get('/users/:id', validate({ params: schemas.userParams }), controller.user);

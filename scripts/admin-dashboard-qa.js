@@ -1,0 +1,17 @@
+// Disposable local browser QA. Uses an in-memory database and no production credentials.
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
+const replset = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
+Object.assign(process.env, { NODE_ENV:'test', DISABLE_JOBS:'true', PAYWALL_ENABLED:'true', MONGODB_URI:replset.getUri('dashboard-qa'), JWT_ACCESS_SECRET:'dashboard-qa-access-secret-long-enough-123', JWT_REFRESH_SECRET:'dashboard-qa-refresh-secret-long-enough-456', CORS_ORIGINS:'http://localhost:3007', SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'', CLOUDINARY_CLOUD_NAME:'',CLOUDINARY_API_KEY:'',CLOUDINARY_API_SECRET:'', OPENAI_API_KEY:'',GEMINI_API_KEY:'', FIREBASE_PROJECT_ID:'',FIREBASE_CLIENT_EMAIL:'',FIREBASE_PRIVATE_KEY:'',REVENUECAT_SECRET_API_KEY:'' });
+const {connectDatabase,disconnectDatabase}=await import('../config/database.js');await connectDatabase();
+const models=await import('../models/index.js');const {default:Coupon}=await import('../models/Coupon.js');const {hashPassword}=await import('../services/auth.service.js');
+const now=new Date();const year=now.getUTCFullYear();
+const admin=await models.User.create({email:'admin@example.test',passwordHash:await hashPassword('DashboardQA123!'),role:'ADMIN',firstName:'Rifat',lastName:'Hossain',displayName:'Rifat Hossain',contactCode:'ADMIN-100-AA',revenueCatAppUserId:'qa-admin'});
+const names=['Akah Larry','Yvan Ndeme','Nde Michael','Vicky Djoulako','Emily Carter','Sophia Turner','Olivia Smith','Ava Johnson','Mia Wilson','Sarah Martinez','James Thompson','Emily Chen','Michael Johnson','Lisa Patel','David Lee','Anna Kim','Robert Garcia','Isaac Fomo','Liam Brown','Noah Davis'];
+const members=await models.User.create(names.map((name,i)=>({email:'member'+i+'@example.test',displayName:name,contactCode:'QA-'+(100+i)+'-FA',revenueCatAppUserId:'qa-member-'+i,plan:i%3?'PREMIUM':'FREE',status:i%4===2?'SUSPENDED':'ACTIVE',phone:'+88 024 3456',profession:'English Professor',country:'France',city:'Paris',interests:['Technology','Music','Travel'],createdAt:new Date(year,i%12,1+(i%27))})));
+await models.RevenueCatEvent.create(Array.from({length:12},(_,i)=>({eventId:'qa-event-'+i,appUserId:'qa-member-1',type:'RENEWAL',priceMinor:[50000,135000,150000,112000,110000,165000,210000,230000,200000,150000,200000,200000][i],currency:'USD',eventAt:new Date(year,i,2),payload:{qa:true}})));
+await models.Subscription.create(members.filter(u=>u.plan==='PREMIUM').map((u,i)=>({userId:u._id,appUserId:u.revenueCatAppUserId,status:'ACTIVE',productId:i%2?'premium_yearly':'premium_monthly'})));
+await models.AuditLog.create(members.slice(0,15).map((u,i)=>({actorId:u._id,action:i%3?'USER_REGISTERED':'USER_PREMIUM',createdAt:new Date(Date.now()-i*300000)})));
+await Coupon.create(names.slice(0,12).map((name,i)=>({name,email:'influencer'+i+'@example.test',code:'SARAH-'+(456+i)+'-FA',discountType:i%2?'FIXED':'PERCENTAGE',discountValue:i%2?20:15,commissionRate:10,startDate:new Date(Date.now()-86400000),endDate:new Date(Date.now()+(i%3===2?-1:1)*86400000),totalUsageLimit:50,perUserLimit:1,redemptions:20,revenue:5000,discountGiven:100,commission:500,createdBy:admin._id})));
+const {default:app}=await import('../app.js');
+const server=app.listen(5508,'127.0.0.1',()=>process.stdout.write('Disposable dashboard QA API ready at http://localhost:5508/api/v1\n'));
+async function stop(){server.close();await disconnectDatabase();await replset.stop();process.exit(0);}process.on('SIGINT',stop);process.on('SIGTERM',stop);

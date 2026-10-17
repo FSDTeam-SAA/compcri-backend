@@ -68,7 +68,7 @@ describe('foundation and authentication', () => {
       '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/conflicts','/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
       '/ai/quota', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
-      '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password'
+      '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password', '/admin/coupons', '/admin/coupons/stats', '/admin/coupons/{id}'
     ];
     expect(Object.keys(docs.body.paths).sort()).toEqual(documentedPaths.sort());
     for (const path of Object.values(docs.body.paths)) {
@@ -1313,4 +1313,65 @@ it('stores and enqueues a silent reminder, honors opt-out, and accepts a full-le
     expect(await createNotification(id, 'REMINDER', 'Disabled', 'Starts now')).toBeNull();
     expect(await models.Notification.countDocuments({ userId: id })).toBe(1);
   } finally { enqueue.mockRestore(); }
+});
+
+describe('admin coupons', () => {
+ const couponInput = (overrides = {}) => ({
+  name: 'Sarah Martinez', email: 'sarah@example.com', code: 'SARAH20', discountType: 'PERCENTAGE',
+  discountValue: 20, commissionRate: 10, startDate: new Date(Date.now() - 86400000).toISOString(),
+  endDate: new Date(Date.now() + 86400000).toISOString(), totalUsageLimit: 500, perUserLimit: 1, ...overrides
+ });
+ const createAdmin = async () => {
+  const { signAccessToken } = await import('../services/token.service.js');
+  const admin = await models.User.create({email:'coupon-admin@example.com',role:'ADMIN',displayName:'Admin',contactCode:'ADMIN-COUPON',revenueCatAppUserId:'coupon-admin'});
+  return {admin, headers: auth(signAccessToken(admin))};
+ };
+ it('persists coupons, paginates and searches them, aggregates totals, and deletes with an audit trail', async () => {
+  const {headers} = await createAdmin();
+  const created = await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput()).expect(201);
+  expect(created.body.data.status).toBe('ACTIVE');
+  expect(created.body.data.redemptions).toBe(0);
+  await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({code:'SARAH21',name:'Alex Smith'})).expect(201);
+  const list = await request(app).get('/api/v1/admin/coupons?page=2&limit=1').set(headers).expect(200);
+  expect(list.body.data).toHaveLength(1);expect(list.body.meta).toMatchObject({page:2,total:2,pages:2});
+  const search = await request(app).get('/api/v1/admin/coupons?search=Alex&status=ACTIVE').set(headers).expect(200);
+  expect(search.body.data).toHaveLength(1);
+  await request(app).get('/api/v1/admin/coupons?search=%5B').set(headers).expect(200);
+  const stats = await request(app).get('/api/v1/admin/coupons/stats').set(headers).expect(200);
+  expect(stats.body.data).toEqual({totalCoupons:2,totalRedemptions:0,discountGiven:0,revenue:0});
+  const id=created.body.data._id;
+  await request(app).get('/api/v1/admin/coupons/'+id).set(headers).expect(200);
+  await request(app).delete('/api/v1/admin/coupons/'+id).set(headers).expect(200);
+  await request(app).get('/api/v1/admin/coupons/'+id).set(headers).expect(404);
+  expect(await models.AuditLog.exists({action:'ADMIN_COUPON_CREATED',targetId:id})).toBeTruthy();
+  expect(await models.AuditLog.exists({action:'ADMIN_COUPON_DELETED',targetId:id})).toBeTruthy();
+  expect((await request(app).get('/api/v1/admin/coupons/stats').set(headers)).body.data.totalCoupons).toBe(1);
+ });
+ it('derives scheduled/expired/exhausted status and rejects duplicate or invalid configurations', async () => {
+  const {headers} = await createAdmin();
+  const expired=await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({code:'EXPIRED',startDate:new Date(Date.now()-172800000).toISOString(),endDate:new Date(Date.now()-86400000).toISOString()})).expect(201);
+  expect(expired.body.data.status).toBe('EXPIRED');
+  const scheduled=await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({code:'FUTURE',startDate:new Date(Date.now()+86400000).toISOString(),endDate:new Date(Date.now()+172800000).toISOString()})).expect(201);
+  expect(scheduled.body.data.status).toBe('SCHEDULED');
+  expect((await request(app).get('/api/v1/admin/coupons?status=SCHEDULED').set(headers)).body.data).toHaveLength(1);
+  expect((await request(app).get('/api/v1/admin/coupons?status=EXPIRED').set(headers)).body.data).toHaveLength(1);
+  await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({code:'expired'})).expect(409);
+  for(const invalid of [{discountValue:101},{perUserLimit:501},{commissionRate:-1},{totalUsageLimit:0},{endDate:'invalid-date'},{redemptions:999}])
+   await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput(invalid)).expect(422);
+  const exhausted=await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({code:'USED',totalUsageLimit:1})).expect(201);
+  const {default:Coupon}=await import('../models/Coupon.js');await Coupon.updateOne({_id:exhausted.body.data._id},{$set:{redemptions:1}});
+  expect((await request(app).get('/api/v1/admin/coupons/'+exhausted.body.data._id).set(headers)).body.data.status).toBe('EXPIRED');
+ });
+ it('requires an admin and prevents using another account’s media', async () => {
+  await request(app).get('/api/v1/admin/coupons').expect(401);
+  const member=await register('coupon-member@example.com').expect(201);
+  const memberHeaders=auth(member.body.data.accessToken);
+  await request(app).get('/api/v1/admin/coupons').set(memberHeaders).expect(403);
+  await request(app).post('/api/v1/admin/coupons').set(memberHeaders).send(couponInput()).expect(403);
+  const {headers}=await createAdmin();
+  const {default:MediaAsset}=await import('../models/MediaAsset.js');
+  const asset=await MediaAsset.create({ownerId:member.body.data.user._id,purpose:'AVATAR',publicId:'coupon-member-photo',secureUrl:'https://example.com/photo.png'});
+  await request(app).post('/api/v1/admin/coupons').set(headers).send(couponInput({avatarMediaId:asset._id.toString()})).expect(400);
+  await request(app).get('/api/v1/admin/coupons/not-an-id').set(headers).expect(422);
+ });
 });

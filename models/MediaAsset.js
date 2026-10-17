@@ -9,7 +9,7 @@ const mediaAssetSchema = new mongoose.Schema({
   bytes: Number,
   width: Number,
   height: Number,
-  claimedByType: { type: String, enum: ['USER', 'EVENT', 'SUPPORT_REQUEST'] },
+  claimedByType: { type: String, enum: ['USER', 'EVENT', 'SUPPORT_REQUEST', 'COUPON'] },
   claimedById: mongoose.Schema.Types.ObjectId,
   claimedAt: Date
 }, { timestamps: true });

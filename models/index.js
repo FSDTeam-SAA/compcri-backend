@@ -18,4 +18,5 @@ export * from './Subscription.js';
 export * from './Legal.js';
 export * from './Operations.js';
 export { default as RateLimit } from './RateLimit.js';
+export { default as Coupon } from './Coupon.js';
 export { default as Migration } from './Migration.js';

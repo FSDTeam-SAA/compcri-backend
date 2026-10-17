@@ -24,7 +24,7 @@ export const dashboard = async (period = 'month') => {
     User.countDocuments({ role: 'USER', plan: 'PREMIUM', status: { $ne: 'DELETED' } }),
     User.aggregate([
       { $match: { role: 'USER', createdAt: { $gte: start } } },
-      { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, day: { $dayOfMonth: '$createdAt' } }, count: { $sum: 1 } } },
+      { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, day: { $dayOfMonth: '$createdAt' } }, count: { $sum: 1 }, free: { $sum: { $cond: [{ $eq: ['$plan', 'FREE'] }, 1, 0] } }, premium: { $sum: { $cond: [{ $eq: ['$plan', 'PREMIUM'] }, 1, 0] } } } },
       { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } }
     ]),
     RevenueCatEvent.aggregate([
@@ -106,7 +106,7 @@ export const listAuditLogs = async (query) => {
   const { page, limit, skip } = parsePagination(query);
   const filter = query.action ? { action: query.action } : {};
   const [items, total] = await Promise.all([
-    AuditLog.find(filter).populate('actorId', 'displayName email role').sort({ createdAt: -1 }).skip(skip).limit(limit),
+    AuditLog.find(filter).populate({ path: 'actorId', select: 'displayName email role contactCode avatarMediaId', populate: { path: 'avatarMediaId' } }).sort({ createdAt: -1 }).skip(skip).limit(limit),
     AuditLog.countDocuments(filter)
   ]);
   return { items, meta: paginationMeta(page, limit, total) };

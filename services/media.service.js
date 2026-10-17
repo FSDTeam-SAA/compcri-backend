@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import MediaAsset from '../models/MediaAsset.js';
 import User from '../models/User.js';
 import Event from '../models/Event.js';
+import Coupon from '../models/Coupon.js';
 import { SupportRequest } from '../models/Operations.js';
 import ApiError from '../utils/ApiError.js';
 import { getEventAccess } from './calendarAccess.service.js';
@@ -61,7 +62,7 @@ export const deleteMediaAsset = async (userId, mediaId, { allowClaimed = false }
   await asset.deleteOne();
 };
 
-const targetPurpose = { USER: 'AVATAR', EVENT: 'EVENT_POSTER', SUPPORT_REQUEST: 'SUPPORT_ATTACHMENT' };
+const targetPurpose = { USER: 'AVATAR', EVENT: 'EVENT_POSTER', SUPPORT_REQUEST: 'SUPPORT_ATTACHMENT', COUPON: 'AVATAR' };
 
 const attachToTarget = async (userId, asset, targetType, targetId) => {
   if (asset.purpose !== targetPurpose[targetType]) throw new ApiError(422, 'Media purpose does not match its target', 'MEDIA_PURPOSE_MISMATCH');
@@ -72,6 +73,10 @@ const attachToTarget = async (userId, asset, targetType, targetId) => {
     const access = await getEventAccess(userId, targetId);
     if (!access.canEdit) throw new ApiError(403, 'Editing this event is not permitted', 'EVENT_EDIT_FORBIDDEN');
     await Event.updateOne({ _id: targetId }, { $set: { posterMediaId: asset._id } });
+  } else if (targetType === 'COUPON') {
+    const coupon = await Coupon.findOne({ _id: targetId, createdBy: userId, deletedAt: null });
+    if (!coupon) throw new ApiError(404, 'Coupon not found', 'COUPON_NOT_FOUND');
+    await Coupon.updateOne({ _id: targetId }, { $set: { avatarMediaId: asset._id } });
   } else {
     const request = await SupportRequest.findOne({ _id: targetId, userId });
     if (!request) throw new ApiError(404, 'Support request not found', 'SUPPORT_REQUEST_NOT_FOUND');

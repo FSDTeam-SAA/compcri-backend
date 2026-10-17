@@ -15,7 +15,7 @@ const id = (name) => ({ name, in: 'path', required: true, schema: { type: 'strin
 
 export const openapi = {
   openapi: '3.1.0',
-  info: { title: `${env.APP_NAME} Calendar API`, version: '1.0.0', description: 'Internal AI-powered calendar API with cost-efficient turn-based voice messaging. External calendar sync, coupons, and direct card collection are outside v1.' },
+  info: { title: `${env.APP_NAME} Calendar API`, version: '1.0.0', description: 'Internal AI-powered calendar API with cost-efficient turn-based voice messaging. Includes admin coupon management. External calendar sync and direct card collection are outside v1.' },
   servers: [{ url: `${env.APP_URL}/api/v1` }],
   components: {
     securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
@@ -163,6 +163,9 @@ export const openapi = {
     '/admin/users/{id}/status': { patch: operation('Suspend or unblock user', { parameters: [id('id')] }) },
     '/admin/subscriptions': { get: operation('Admin subscription analytics') },
     '/admin/audit-logs': { get: operation('Admin audit log') },
+    '/admin/coupons': { get: operation('List and filter influencer coupons with pagination'), post: operation('Create an influencer coupon', { status: 201 }) },
+    '/admin/coupons/stats': { get: operation('Get coupon totals and performance') },
+    '/admin/coupons/{id}': { get: operation('Get influencer coupon details', { parameters: [id('id')] }), delete: operation('Delete an influencer coupon', { parameters: [id('id')] }) },
     '/admin/profile': { get: operation('Get admin profile'), patch: operation('Update admin profile') },
     '/admin/password': { put: operation('Change admin password') }
   }
