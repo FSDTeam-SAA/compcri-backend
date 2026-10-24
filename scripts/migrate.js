@@ -14,6 +14,17 @@ const migrations = [
         logger.info({ model: modelName }, 'Indexes synchronized');
       }
     }
+  },
+  {
+    version: '002-usage-and-influencer-indexes',
+    description: 'Create indexes for usage tracking, influencer redemptions and report queries',
+    // createIndexes only adds what is declared and never drops an index.
+    up: async () => {
+      for (const modelName of ['AppInstall', 'UserActivity', 'CouponRedemption', 'User', 'RevenueCatEvent', 'Coupon']) {
+        await mongoose.model(modelName).createIndexes();
+        logger.info({ model: modelName }, 'Indexes created');
+      }
+    }
   }
 ];
 

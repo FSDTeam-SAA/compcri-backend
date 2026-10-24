@@ -17,5 +17,8 @@ export const webhook = catchAsync(async (req, res) => {
   }
   const { event, duplicate } = await service.recordWebhook(req.body);
   if (!duplicate) await enqueueJob('reconcile-revenuecat', { eventId: event.id, appUserId: event.app_user_id });
+  // After the entitlement job is queued: a failure here makes RevenueCat
+  // retry, and the retry repeats only this idempotent step.
+  await service.processStoreEvent(event);
   sendSuccess(res, { accepted: true, duplicate });
 });
