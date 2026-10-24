@@ -19,6 +19,7 @@ import noteRoutes from './routes/note.routes.js';
 import subscriptionRoutes from './routes/subscription.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import appRoutes from './routes/app.routes.js';
 import notFound from './middlewares/notFound.js';
 import globalErrorHandler from './middlewares/globalErrorHandler.js';
 import { requestContext } from './middlewares/requestContext.js';
@@ -68,6 +69,7 @@ app.use('/api/v1', notificationRoutes);
 app.use('/api/v1', noteRoutes);
 app.use('/api/v1', subscriptionRoutes);
 app.use('/api/v1/ai', aiRoutes);
+app.use('/api/v1', appRoutes);
 app.use('/api/v1/admin', adminRoutes);
 
 app.use(notFound);

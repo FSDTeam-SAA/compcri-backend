@@ -32,3 +32,4 @@ export const password = catchAsync(async (req, res) => {
   sendSuccess(res, { passwordChanged: true, sessionsRevoked: true });
 });
 
+export const auditActionList = () => service.auditActions();

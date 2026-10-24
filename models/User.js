@@ -46,6 +46,8 @@ const userSchema = new mongoose.Schema({
   premiumUntil: Date,
   notificationPreferences: { type: notificationPreferencesSchema, default: () => ({}) },
   lastLoginAt: Date,
+  // Last authenticated request, refreshed at most every few minutes.
+  lastActiveAt: { type: Date, index: true },
   passwordChangedAt: Date
 }, { timestamps: true });
 
