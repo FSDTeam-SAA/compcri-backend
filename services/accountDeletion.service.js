@@ -18,6 +18,8 @@ import { Conversation, PendingAiAction, AiProviderUsage, AiUsage } from '../mode
 import { LegalAcceptance } from '../models/Legal.js';
 import { AccountDeletion, AuditLog, SupportRequest } from '../models/Operations.js';
 import { RevenueCatEvent, Subscription } from '../models/Subscription.js';
+import CouponRedemption from '../models/CouponRedemption.js';
+import { AppInstall, UserActivity } from '../models/Analytics.js';
 import { deleteMediaAsset } from './media.service.js';
 import { deleteRevenueCatCustomer } from './revenuecat.service.js';
 
@@ -71,6 +73,11 @@ export const purgeAccount = async (userId) => {
     ownedCalendar ? AiUsage.deleteMany({ calendarId: ownedCalendar._id }) : Promise.resolve(),
     ownedCalendar ? AiProviderUsage.deleteMany({ calendarId: ownedCalendar._id }) : Promise.resolve(),
     LegalAcceptance.deleteMany({ userId }),
+    UserActivity.deleteMany({ userId }),
+    AppInstall.updateMany({ userId }, { $unset: { userId: 1 } }),
+    // Completed redemptions stay, without the person, so an influencer's
+    // conversions and commission do not change when a customer leaves.
+    CouponRedemption.deleteMany({ userId, status: 'APPLIED' }).then(() => CouponRedemption.updateMany({ userId }, { $unset: { userId: 1 } })),
     SupportRequest.updateMany({ userId }, { $unset: { userId: 1 }, $set: { name: 'Deleted user', email: 'deleted@compcri.invalid', phone: null } }),
     AuditLog.updateMany({ actorId: userId }, { $unset: { actorId: 1 }, $set: { metadata: { anonymizedActor: sha256(userId.toString()) } } })
   ]);

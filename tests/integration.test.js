@@ -73,7 +73,9 @@ describe('foundation and authentication', () => {
       '/media', '/media/{id}', '/media/{id}/claim', '/media/{id}/replace', '/calendars/{calendarId}/events', '/calendars/{calendarId}/availability', '/calendars/{calendarId}/conflicts','/calendars/{calendarId}/settings', '/events/shared', '/events/{eventId}', '/events/{eventId}/completion', '/events/{eventId}/shares', '/events/{eventId}/shares/{shareId}', '/events/{eventId}/recurrence-exception', '/events/{eventId}/rsvp',
       '/delegations', '/delegations/lookup', '/delegations/{id}', '/contacts', '/contacts/{id}', '/contacts/{id}/events', '/contact-requests', '/contact-requests/{id}', '/groups', '/groups/join', '/groups/{id}', '/groups/{id}/members', '/groups/{id}/members/{memberId}', '/groups/{id}/invitations', '/groups/{id}/events', '/groups/{id}/transfer', '/groups/{id}/leave', '/group-invitations', '/group-invitations/{id}',
       '/ai/quota', '/ai/voices/{voice}/preview', '/ai/conversations', '/ai/conversations/{id}', '/ai/conversations/{id}/messages', '/ai/conversations/{id}/messages/stream', '/ai/conversations/{id}/voice-messages', '/ai/conversations/{id}/voice-messages/stream', '/ai/conversations/{id}/messages/{messageId}', '/ai/conversations/{id}/messages/{messageId}/speech', '/ai/actions/{id}/confirm', '/ai/actions/{id}/reject', '/notifications', '/notifications/read-all', '/notifications/{id}/read', '/notifications/{id}', '/devices', '/notes', '/notes/voice', '/notes/{id}', '/subscriptions/me', '/subscriptions/reconcile', '/webhooks/revenuecat', '/legal', '/legal/{type}', '/support-requests',
-      '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password', '/admin/coupons', '/admin/coupons/stats', '/admin/coupons/{id}'
+      '/admin/auth/login', '/admin/dashboard', '/admin/users', '/admin/users/{id}', '/admin/users/{id}/status', '/admin/subscriptions', '/admin/audit-logs', '/admin/profile', '/admin/password', '/admin/coupons', '/admin/coupons/stats', '/admin/coupons/{id}',
+      '/admin/coupons/{id}/redemptions', '/admin/audit-logs/actions', '/admin/analytics/usage', '/admin/reports/financial', '/admin/reports/transactions', '/admin/reports/transactions/export',
+      '/app/installs', '/coupons/apply', '/coupons/applied'
     ];
     expect(Object.keys(docs.body.paths).sort()).toEqual(documentedPaths.sort());
     for (const path of Object.values(docs.body.paths)) {
@@ -1589,5 +1591,171 @@ describe('history deletion and date locks', () => {
     // Earlier today is a separate time warning; the entire current day is never locked.
     const today = DateTime.now().startOf('day').plus({ hours: 9 });
     await request(app).post(`/api/v1/calendars/${calendarId}/events`).set(auth(token)).send({ ...input, startsAt: today.toISO(), endsAt: today.plus({ hours: 1 }).toISO() }).expect(201);
+  });
+});
+
+describe('influencer codes, usage analytics and financial reports', () => {
+  const webhook = (event) => request(app).post('/api/v1/webhooks/revenuecat').set('Authorization', 'Bearer test-webhook-secret').send({ api_version: '1.0', event });
+  const storeEvent = (appUserId, overrides = {}) => ({
+    id: `evt-${Math.random().toString(36).slice(2)}`, app_user_id: appUserId, environment: 'PRODUCTION', store: 'APP_STORE',
+    product_id: 'premium_monthly', currency: 'USD', event_timestamp_ms: Date.now(), purchased_at_ms: Date.now(),
+    expiration_at_ms: Date.now() + 30 * 86400000, original_transaction_id: 'txn-1', transaction_id: 'txn-1', takehome_percentage: 0.85, country_code: 'US',
+    ...overrides
+  });
+  const setup = async () => {
+    const { signAccessToken } = await import('../services/token.service.js');
+    const admin = await models.User.create({ email: 'growth-admin@example.com', role: 'ADMIN', displayName: 'Admin', contactCode: 'ADMIN-GROWTH', revenueCatAppUserId: 'growth-admin' });
+    const headers = auth(signAccessToken(admin));
+    const coupon = await request(app).post('/api/v1/admin/coupons').set(headers).send({
+      name: 'Sarah Martinez', email: 'sarah@example.com', code: 'SARAH20', discountType: 'PERCENTAGE', discountValue: 20, commissionRate: 10,
+      startDate: new Date(Date.now() - 86400000).toISOString(), endDate: new Date(Date.now() + 86400000).toISOString(), totalUsageLimit: 100, perUserLimit: 1, offeringId: 'influencer_20'
+    }).expect(201);
+    const member = await register('buyer@example.com', 'Buyer').expect(201);
+    const appUserId = (await models.User.findOne({ email: 'buyer@example.com' })).revenueCatAppUserId;
+    return { headers, coupon: coupon.body.data, token: member.body.data.accessToken, userId: member.body.data.user._id, appUserId };
+  };
+
+  it('applies a code, credits the trial conversion once, and reverses it on refund', async () => {
+    const { headers, coupon, token, userId, appUserId } = await setup();
+    const applied = await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: ' sarah20 ' }).expect(200);
+    expect(applied.body.data).toMatchObject({ code: 'SARAH20', offeringId: 'influencer_20', discountType: 'PERCENTAGE', discountValue: 20, influencerName: 'Sarah Martinez' });
+    expect(applied.body.data.email).toBeUndefined();
+    expect((await request(app).get('/api/v1/coupons/applied').set(auth(token)).expect(200)).body.data.code).toBe('SARAH20');
+
+    const trial = storeEvent(appUserId, { type: 'INITIAL_PURCHASE', period_type: 'TRIAL', price: 0, price_in_purchased_currency: 0, presented_offering_id: 'influencer_20' });
+    await webhook(trial).expect(200);
+    await webhook(trial).expect(200);
+    let stored = await models.Coupon.findById(coupon._id);
+    expect(stored.redemptions).toBe(1);
+    expect(stored.revenue).toBe(0);
+    expect((await request(app).get('/api/v1/coupons/applied').set(auth(token)).expect(200)).body.data).toBeNull();
+
+    const conversion = storeEvent(appUserId, { type: 'RENEWAL', is_trial_conversion: true, period_type: 'NORMAL', price: 7.19, price_in_purchased_currency: 7.19 });
+    await webhook(conversion).expect(200);
+    await webhook(conversion).expect(200);
+    stored = await models.Coupon.findById(coupon._id);
+    expect(stored.revenue).toBeCloseTo(7.19);
+    expect(stored.commission).toBeCloseTo(0.72);
+    expect(stored.discountGiven).toBeCloseTo(1.8);
+
+    // A second purchase without the code is not credited again.
+    await webhook(storeEvent(appUserId, { type: 'RENEWAL', price: 8.99, price_in_purchased_currency: 8.99 })).expect(200);
+    expect((await models.Coupon.findById(coupon._id)).revenue).toBeCloseTo(7.19);
+
+    const redemptions = await request(app).get(`/api/v1/admin/coupons/${coupon._id}/redemptions`).set(headers).expect(200);
+    expect(redemptions.body.data).toHaveLength(1);
+    expect(redemptions.body.data[0]).toMatchObject({ status: 'COMPLETED', environment: 'PRODUCTION', revenueUsd: 7.19 });
+    expect(redemptions.body.data[0].userId.email).toBe('buyer@example.com');
+
+    await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'SARAH20' }).expect(409);
+
+    const refund = storeEvent(appUserId, { type: 'CANCELLATION', cancel_reason: 'CUSTOMER_SUPPORT', price: -7.19, price_in_purchased_currency: -7.19 });
+    await webhook(refund).expect(200);
+    await webhook(refund).expect(200);
+    stored = await models.Coupon.findById(coupon._id);
+    expect(stored.revenue).toBeCloseTo(0);
+    expect(stored.commission).toBeCloseTo(0);
+
+    const activity = await request(app).get(`/api/v1/admin/audit-logs?actorId=${userId}`).set(headers).expect(200);
+    const actions = activity.body.data.map((row) => row.action);
+    expect(actions).toEqual(expect.arrayContaining(['COUPON_APPLIED', 'SUBSCRIPTION_STARTED', 'SUBSCRIPTION_RENEWED', 'SUBSCRIPTION_REFUNDED']));
+    expect(actions.filter((action) => action === 'SUBSCRIPTION_STARTED')).toHaveLength(1);
+  });
+
+  it('rejects unusable codes and keeps sandbox purchases out of the totals', async () => {
+    const { headers, coupon, token, appUserId } = await setup();
+    await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'NOPE' }).expect(404);
+    const unconfigured = await request(app).post('/api/v1/admin/coupons').set(headers).send({
+      name: 'Alex', email: 'alex@example.com', code: 'ALEX10', discountType: 'FIXED', discountValue: 2, commissionRate: 5,
+      startDate: new Date(Date.now() - 86400000).toISOString(), endDate: new Date(Date.now() + 86400000).toISOString(), totalUsageLimit: 10, perUserLimit: 1
+    }).expect(201);
+    expect((await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'ALEX10' }).expect(409)).body.error.code).toBe('COUPON_NOT_CONFIGURED');
+    const patched = await request(app).patch(`/api/v1/admin/coupons/${unconfigured.body.data._id}`).set(headers).send({ offeringId: 'influencer_fixed' }).expect(200);
+    expect(patched.body.data.offeringId).toBe('influencer_fixed');
+    await request(app).patch(`/api/v1/admin/coupons/${unconfigured.body.data._id}`).set(headers).send({ perUserLimit: 50 }).expect(422);
+    await request(app).patch(`/api/v1/admin/coupons/${unconfigured.body.data._id}`).set(headers).send({ code: 'SARAH20' }).expect(409);
+    await request(app).patch(`/api/v1/admin/coupons/${unconfigured.body.data._id}`).set(headers).send({ endDate: new Date(Date.now() - 2 * 86400000).toISOString(), startDate: new Date(Date.now() - 3 * 86400000).toISOString() }).expect(200);
+    expect((await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'ALEX10' }).expect(409)).body.error.code).toBe('COUPON_EXPIRED');
+
+    await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'SARAH20' }).expect(200);
+    await webhook(storeEvent(appUserId, { type: 'INITIAL_PURCHASE', environment: 'SANDBOX', period_type: 'NORMAL', price: 7.19, price_in_purchased_currency: 7.19, presented_offering_id: 'influencer_20' })).expect(200);
+    const stored = await models.Coupon.findById(coupon._id);
+    expect(stored.redemptions).toBe(0);
+    expect(stored.revenue).toBe(0);
+    expect(await models.CouponRedemption.countDocuments({ status: 'COMPLETED', environment: 'SANDBOX' })).toBe(1);
+    // Sandbox use does not spend the customer's one use of the code.
+    await request(app).post('/api/v1/coupons/apply').set(auth(token)).send({ code: 'SARAH20' }).expect(200);
+  });
+
+  it('credits a store offer code named after an influencer code', async () => {
+    const { coupon, appUserId } = await setup();
+    await webhook(storeEvent(appUserId, { type: 'INITIAL_PURCHASE', period_type: 'NORMAL', price: 7.19, price_in_purchased_currency: 7.19, offer_code: 'sarah20' })).expect(200);
+    const stored = await models.Coupon.findById(coupon._id);
+    expect(stored.redemptions).toBe(1);
+    expect(stored.revenue).toBeCloseTo(7.19);
+  });
+
+  it('records installs and daily activity and reports usage', async () => {
+    const { headers, token, userId } = await setup();
+    const installId = 'install-0001-abcdef-123456';
+    await request(app).post('/api/v1/app/installs').send({ installId, platform: 'ios', appVersion: '1.4.0' }).expect(200);
+    await request(app).post('/api/v1/app/installs').send({ installId, platform: 'ios', appVersion: '1.4.0' }).expect(200);
+    await request(app).post('/api/v1/app/installs').send({ installId: 'install-0002-abcdef-123456', platform: 'android', preexisting: true }).expect(200);
+    await request(app).post('/api/v1/app/installs').send({ installId: 'bad', platform: 'ios' }).expect(422);
+    await request(app).get('/api/v1/users/me').set(auth(token)).set('X-Client-Platform', 'ios').set('X-App-Version', '1.4.0').set('X-Install-Id', installId).expect(200);
+    await vi.waitFor(async () => {
+      expect(await models.UserActivity.countDocuments({ userId })).toBe(1);
+      expect((await models.AppInstall.findOne({ installId })).userId?.toString()).toBe(userId);
+    });
+    expect((await models.AppInstall.findOne({ installId })).opens).toBe(2);
+    await vi.waitFor(async () => expect((await models.User.findById(userId)).lastActiveAt).toBeTruthy());
+
+    const usage = await request(app).get('/api/v1/admin/analytics/usage').set(headers).expect(200);
+    expect(usage.body.data.installs).toMatchObject({ total: 1, tracked: 2, inRange: 1 });
+    expect(usage.body.data.activity).toMatchObject({ dau: 1, wau: 1, mau: 1, activeInRange: 1, byPlatform: { IOS: 1 } });
+    expect(usage.body.data.users.signupsInRange).toBe(1);
+    expect(usage.body.data.topUsers[0].user.email).toBe('buyer@example.com');
+    expect(usage.body.data.series.find((row) => row.bucket === '2026-02-01')).toMatchObject({ installs: 1, iosInstalls: 1, signups: 1, activeUsers: 1 });
+    await request(app).get('/api/v1/admin/analytics/usage?from=2026-02-02&to=2026-02-01').set(headers).expect(422);
+
+    const detail = await request(app).get(`/api/v1/admin/users/${userId}`).set(headers).expect(200);
+    expect(detail.body.data.activity).toMatchObject({ activeDaysLast30: 1, lastPlatform: 'IOS', lastAppVersion: '1.4.0' });
+    expect(detail.body.data.activity.installs[0]).toMatchObject({ platform: 'IOS', appVersion: '1.4.0' });
+    const recent = await request(app).get('/api/v1/admin/users?sort=lastActive&activeWithinDays=7').set(headers).expect(200);
+    expect(recent.body.data.map((user) => user.email)).toEqual(['buyer@example.com']);
+    expect(recent.body.data[0].lastActiveAt).toBeTruthy();
+  });
+
+  it('reports revenue, refunds, proceeds, recurring revenue and transactions', async () => {
+    const { headers, appUserId } = await setup();
+    await models.Subscription.updateOne({ appUserId }, { $set: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 20 * 86400000) } });
+    await webhook(storeEvent(appUserId, { type: 'INITIAL_PURCHASE', period_type: 'NORMAL', price: 8.99, price_in_purchased_currency: 8.99, event_timestamp_ms: Date.now() - 60000 })).expect(200);
+    await webhook(storeEvent(appUserId, { type: 'RENEWAL', price: 10, price_in_purchased_currency: 50, currency: 'BRL', country_code: 'BR', store: 'PLAY_STORE', takehome_percentage: 0.7 })).expect(200);
+    await webhook(storeEvent(appUserId, { type: 'CANCELLATION', price: -8.99, price_in_purchased_currency: -8.99 })).expect(200);
+    await webhook(storeEvent(appUserId, { type: 'INITIAL_PURCHASE', environment: 'SANDBOX', price: 100, price_in_purchased_currency: 100 })).expect(200);
+
+    const report = await request(app).get('/api/v1/admin/reports/financial').set(headers).expect(200);
+    const data = report.body.data;
+    expect(data.totalsUsd).toMatchObject({ gross: 18.99, refunds: 8.99, net: 10, transactions: 2 });
+    expect(data.totalsUsd.proceeds).toBeCloseTo(8.99 * 0.85 + 10 * 0.7 - 8.99 * 0.85, 2);
+    expect(data.byCurrency.find((row) => row.currency === 'BRL')).toMatchObject({ gross: 50, transactions: 1 });
+    expect(data.activity).toMatchObject({ newPurchases: 1, renewals: 1, refunds: 1 });
+    expect(data.byCountry.map((row) => row.country).sort()).toEqual(['BR', 'US']);
+    expect(data.recurring.activePaidSubscriptions).toBe(1);
+    // The latest payment, spread from its 30-day period over an average month.
+    expect(data.recurring.mrrUsd).toBeCloseTo(10 * 30.4375 / 30, 1);
+    const withSandbox = await request(app).get('/api/v1/admin/reports/financial?includeSandbox=true').set(headers).expect(200);
+    expect(withSandbox.body.data.totalsUsd.gross).toBeCloseTo(118.99);
+
+    const transactions = await request(app).get('/api/v1/admin/reports/transactions?limit=2').set(headers).expect(200);
+    expect(transactions.body.meta.total).toBe(3);
+    expect(transactions.body.data[0].user.email).toBe('buyer@example.com');
+    const refunds = await request(app).get('/api/v1/admin/reports/transactions?kind=REFUND').set(headers).expect(200);
+    expect(refunds.body.data).toHaveLength(1);
+    const csv = await request(app).get('/api/v1/admin/reports/transactions/export').set(headers).expect(200);
+    expect(csv.headers['content-type']).toContain('text/csv');
+    expect(csv.text.split('\r\n')).toHaveLength(4);
+    expect(csv.text).toContain('buyer@example.com');
+    await request(app).get('/api/v1/admin/reports/financial').set(auth((await register('nosy@example.com').expect(201)).body.data.accessToken)).expect(403);
   });
 });

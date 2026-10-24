@@ -10,6 +10,9 @@ const couponSchema = new mongoose.Schema({
  startDate: { type: Date, required: true }, endDate: { type: Date, required: true },
  totalUsageLimit: { type: Number, required: true, min: 1 },
  perUserLimit: { type: Number, required: true, min: 1 },
+ // The RevenueCat offering whose discounted products the app sells while this
+ // code is applied. Without one the code cannot be used in the app.
+ offeringId: { type: String, trim: true, maxlength: 100 },
  redemptions: { type: Number, default: 0, min: 0 },
  revenue: { type: Number, default: 0, min: 0 },
  discountGiven: { type: Number, default: 0, min: 0 },

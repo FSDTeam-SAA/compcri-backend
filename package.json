@@ -5,9 +5,9 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "dev": "nodemon server.js",
-    "dev:worker": "nodemon worker.js",
-    "start": "node server.js",
+    "dev": "node init && nodemon server.js",
+    "dev:worker": "node init && nodemon worker.js",
+    "start": "node init && node server.js",
     "worker": "node worker.js",
     "seed": "node scripts/seed.js",
     "db:migrate": "node scripts/migrate.js",

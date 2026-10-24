@@ -27,6 +27,7 @@ const revenueCatEventSchema = new mongoose.Schema({
   processedAt: Date,
   processingError: String
 }, { timestamps: true });
+revenueCatEventSchema.index({ eventAt: -1 });
 
 export const Subscription = mongoose.model('Subscription', subscriptionSchema);
 export const RevenueCatEvent = mongoose.model('RevenueCatEvent', revenueCatEventSchema);
