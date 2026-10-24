@@ -1,6 +1,8 @@
 import { env } from '../config/env.js';
 import User from '../models/User.js';
 import { RevenueCatEvent, Subscription } from '../models/Subscription.js';
+import { AuditLog } from '../models/Operations.js';
+import { attributeStoreEvent } from './coupon.service.js';
 import ApiError from '../utils/ApiError.js';
 import { createNotification } from './notification.service.js';
 import { effectivePlan } from '../utils/premium.js';
@@ -110,3 +112,48 @@ export const markWebhookProcessed = (eventId, error) => RevenueCatEvent.updateOn
 );
 
 export const deleteRevenueCatCustomer = async (appUserId) => requestRevenueCat(`/subscribers/${encodeURIComponent(appUserId)}`, { method: 'DELETE' });
+
+const ACTIVITY_LABELS = {
+  INITIAL_PURCHASE: 'SUBSCRIPTION_STARTED',
+  NON_RENEWING_PURCHASE: 'SUBSCRIPTION_PURCHASED',
+  RENEWAL: 'SUBSCRIPTION_RENEWED',
+  CANCELLATION: 'SUBSCRIPTION_CANCELLED',
+  UNCANCELLATION: 'SUBSCRIPTION_RESUMED',
+  EXPIRATION: 'SUBSCRIPTION_EXPIRED',
+  BILLING_ISSUE: 'SUBSCRIPTION_BILLING_ISSUE',
+  PRODUCT_CHANGE: 'SUBSCRIPTION_CHANGED'
+};
+
+/// Everything a store event means beyond the entitlement itself: credit for
+/// an influencer code, and a line in the customer's activity. Both are keyed
+/// to the event, so a redelivered webhook changes nothing twice.
+export const processStoreEvent = async (event) => {
+  const ids = [event.app_user_id, event.original_app_user_id, ...(event.aliases || [])].filter(Boolean);
+  const user = await User.findOne({ revenueCatAppUserId: { $in: ids } }).select('_id');
+  if (!user) return;
+  await attributeStoreEvent(event, user);
+  const action = ACTIVITY_LABELS[event.type];
+  if (!action) return;
+  const price = Number(event.price_in_purchased_currency ?? event.price);
+  const refund = event.type === 'CANCELLATION' && price < 0;
+  await AuditLog.updateOne(
+    { action: refund ? 'SUBSCRIPTION_REFUNDED' : action, 'metadata.eventId': event.id },
+    {
+      $setOnInsert: {
+        actorId: user._id,
+        targetType: 'Subscription',
+        metadata: {
+          eventId: event.id,
+          productId: event.product_id,
+          store: event.store,
+          environment: event.environment,
+          ...(Number.isFinite(price) && { price, currency: event.currency }),
+          ...(event.is_trial_conversion && { trialConversion: true }),
+          ...(event.period_type === 'TRIAL' && { trial: true })
+        },
+        createdAt: event.event_timestamp_ms ? new Date(event.event_timestamp_ms) : new Date()
+      }
+    },
+    { upsert: true, timestamps: false }
+  );
+};

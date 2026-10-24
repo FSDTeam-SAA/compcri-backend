@@ -6,6 +6,12 @@ import { LOCALES } from '../constants/enums.js';
 const messages = {
   pt: {
     'Past dates are view-only. Choose today or a future date.': 'Datas passadas são apenas para consulta. Escolha hoje ou uma data futura.',
+    // Influencer codes
+    'This code is not valid': 'Este código não é válido',
+    'This code is not active yet': 'Este código ainda não está ativo',
+    'This code has expired': 'Este código expirou',
+    'This code cannot be used in the app yet': 'Este código ainda não pode ser usado no app',
+    'You have already used this code': 'Você já usou este código',
     // Generic failures
     'Validation failed': 'Verifique os dados informados',
     'Something went wrong': 'Algo deu errado',
@@ -177,6 +183,12 @@ const messages = {
   },
   es: {
     'Past dates are view-only. Choose today or a future date.': 'Las fechas pasadas son solo de consulta. Elige hoy o una fecha futura.',
+    // Influencer codes
+    'This code is not valid': 'Este código no es válido',
+    'This code is not active yet': 'Este código aún no está activo',
+    'This code has expired': 'Este código ha caducado',
+    'This code cannot be used in the app yet': 'Este código aún no se puede usar en la app',
+    'You have already used this code': 'Ya has usado este código',
     'Validation failed': 'Revisa los datos introducidos',
     'Something went wrong': 'Algo salió mal',
     'Invalid resource identifier': 'Identificador no válido',

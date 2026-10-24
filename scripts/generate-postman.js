@@ -8,7 +8,7 @@ const environmentFile = new URL('Compcri-local.postman_environment.json', output
 const publicPaths = new Set([
   '/auth/register', '/auth/login', '/auth/google', '/auth/refresh', '/auth/logout',
   '/auth/forgot-password', '/auth/verify-reset-otp', '/auth/reset-password', '/auth/cancel-deletion',
-  '/webhooks/revenuecat', '/legal', '/legal/{type}', '/admin/auth/login'
+  '/webhooks/revenuecat', '/legal', '/legal/{type}', '/admin/auth/login', '/app/installs'
 ]);
 
 const sampleBodies = {

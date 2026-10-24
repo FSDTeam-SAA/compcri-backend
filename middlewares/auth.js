@@ -2,6 +2,7 @@ import { StatusCodes } from 'http-status-codes';
 import User from '../models/User.js';
 import ApiError from '../utils/ApiError.js';
 import { verifyAccessToken } from '../services/token.service.js';
+import { trackActivity } from '../services/analytics.service.js';
 
 export const authenticate = async (req, res, next) => {
   try {
@@ -12,6 +13,7 @@ export const authenticate = async (req, res, next) => {
     const user = await User.findById(payload.sub);
     if (!user || user.status !== 'ACTIVE') throw new ApiError(StatusCodes.FORBIDDEN, 'Account is unavailable', 'ACCOUNT_UNAVAILABLE');
     req.user = user;
+    if (user.role === 'USER') trackActivity(user._id, req);
     next();
   } catch (error) {
     next(error);

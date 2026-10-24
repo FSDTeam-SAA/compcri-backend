@@ -8,6 +8,9 @@ import { parsePagination, paginationMeta } from '../utils/pagination.js';
 import { revokeAllSessions } from './token.service.js';
 import { enqueueJob } from '../jobs/agenda.js';
 import { escapeRegex } from '../utils/regex.js';
+import CouponRedemption from '../models/CouponRedemption.js';
+import Device from '../models/Device.js';
+import { userActivitySummary } from './analytics.service.js';
 
 const periodStart = (period) => {
   const now = new Date();
@@ -37,18 +40,26 @@ export const dashboard = async (period = 'month') => {
   return { totals: { totalUsers, freeUsers, premiumUsers }, userGrowth, revenueByCurrency: revenue, recentActivity };
 };
 
+const userSorts = {
+  newest: { createdAt: -1 },
+  lastActive: { lastActiveAt: -1, createdAt: -1 },
+  leastActive: { lastActiveAt: 1, createdAt: 1 }
+};
+
 export const listUsers = async (query) => {
   const { page, limit, skip } = parsePagination(query);
   const filter = { role: 'USER' };
   if (query.plan) filter.plan = query.plan;
   if (query.status) filter.status = query.status;
+  if (query.activeWithinDays) filter.lastActiveAt = { $gte: new Date(Date.now() - query.activeWithinDays * 24 * 60 * 60 * 1000) };
+  if (query.inactiveForDays) filter.$and = [{ $or: [{ lastActiveAt: { $lt: new Date(Date.now() - query.inactiveForDays * 24 * 60 * 60 * 1000) } }, { lastActiveAt: null }] }];
   if (query.search) filter.$or = [
     { displayName: { $regex: escapeRegex(query.search), $options: 'i' } },
     { email: { $regex: escapeRegex(query.search), $options: 'i' } },
     { contactCode: { $regex: escapeRegex(query.search), $options: 'i' } }
   ];
   const [items, total] = await Promise.all([
-    User.find(filter).select('displayName email contactCode plan status createdAt avatarMediaId profession country city phone interests').populate('avatarMediaId').sort({ createdAt: -1 }).skip(skip).limit(limit),
+    User.find(filter).select('displayName email contactCode plan status createdAt avatarMediaId profession country city phone interests lastActiveAt lastLoginAt').populate('avatarMediaId').sort(userSorts[query.sort] || userSorts.newest).skip(skip).limit(limit),
     User.countDocuments(filter)
   ]);
   return { items, meta: paginationMeta(page, limit, total) };
@@ -61,7 +72,29 @@ export const getUser = async (id) => {
     AccountDeletion.findOne({ userId: id, cancelledAt: null, purgedAt: null })
   ]);
   if (!user) throw new ApiError(404, 'User not found', 'USER_NOT_FOUND');
-  return { user, subscription, deletion };
+  const [activity, devices, payments, coupons, recentActions] = await Promise.all([
+    userActivitySummary(user._id),
+    Device.find({ userId: id }).select('platform lastSeenAt createdAt').sort({ lastSeenAt: -1 }).limit(5).lean(),
+    RevenueCatEvent.find({ appUserId: user.revenueCatAppUserId, type: { $in: ['INITIAL_PURCHASE', 'RENEWAL', 'NON_RENEWING_PURCHASE', 'CANCELLATION', 'EXPIRATION', 'BILLING_ISSUE', 'UNCANCELLATION', 'PRODUCT_CHANGE'] } })
+      .select('eventId type productId platform priceMinor currency eventAt payload.event.environment payload.event.period_type payload.event.is_trial_conversion').sort({ eventAt: -1 }).limit(20).lean(),
+    CouponRedemption.find({ userId: id }).select('code status environment appliedAt completedAt paidAt revenueUsd refundedAt').sort({ createdAt: -1 }).limit(10).lean(),
+    AuditLog.find({ $or: [{ actorId: id }, { targetType: 'User', targetId: id }] }).select('action createdAt metadata actorId').sort({ createdAt: -1 }).limit(20).lean()
+  ]);
+  return {
+    user, subscription, deletion, activity, devices, coupons, recentActions,
+    payments: payments.map((row) => ({
+      id: row.eventId,
+      type: row.type,
+      productId: row.productId,
+      store: row.platform,
+      amount: (row.priceMinor || 0) / 100,
+      currency: row.currency,
+      at: row.eventAt,
+      environment: row.payload?.event?.environment || 'PRODUCTION',
+      trial: row.payload?.event?.period_type === 'TRIAL',
+      trialConversion: Boolean(row.payload?.event?.is_trial_conversion)
+    }))
+  };
 };
 
 export const changeUserStatus = async (actorId, id, action) => {
@@ -104,10 +137,15 @@ export const subscriptionAnalytics = async (period = 'month') => {
 
 export const listAuditLogs = async (query) => {
   const { page, limit, skip } = parsePagination(query);
-  const filter = query.action ? { action: query.action } : {};
+  const filter = {};
+  if (query.action) filter.action = query.action;
+  if (query.actorId) filter.actorId = query.actorId;
+  if (query.from || query.to) filter.createdAt = { ...(query.from && { $gte: new Date(`${query.from}T00:00:00.000Z`) }), ...(query.to && { $lte: new Date(`${query.to}T23:59:59.999Z`) }) };
   const [items, total] = await Promise.all([
     AuditLog.find(filter).populate({ path: 'actorId', select: 'displayName email role contactCode avatarMediaId', populate: { path: 'avatarMediaId' } }).sort({ createdAt: -1 }).skip(skip).limit(limit),
     AuditLog.countDocuments(filter)
   ]);
   return { items, meta: paginationMeta(page, limit, total) };
 };
+
+export const auditActions = () => AuditLog.distinct('action');
